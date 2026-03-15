@@ -101,9 +101,9 @@ const G = `
     to   { transform: translateX(300%); }
   }
 
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50%       { opacity: 0.5; transform: scale(0.8); }
+  @keyframes breathe {
+    0%, 100% { stroke-width: 1.5; filter: drop-shadow(0 0 4px currentColor); }
+    50%       { stroke-width: 3.5; filter: drop-shadow(0 0 12px currentColor); }
   }
 
   @keyframes glow-pulse {
@@ -356,95 +356,263 @@ function GaugeArc({ value, size = 100 }) {
 function Graph({ deps, onPick }) {
   const [pos, setPos] = useState([]);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [hov, setHov] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sevFilter, setSevFilter] = useState(null); // null = show all
+  const dragStart = useRef(null);
   const posR = useRef([]), velR = useRef([]), raf = useRef(null);
-  const W = 800, H = 500;
+
+  const W = 1200, H = 700;
+  const n = deps.length;
+
+  // Uniform node radius based on count — keeps all nodes same size for clarity
+  const R = n > 300 ? 8 : n > 150 ? 11 : n > 60 ? 14 : n > 25 ? 17 : 20;
+  // Minimum gap between node edges
+  const gap = R * 0.8;
+  // Minimum center-to-center distance
+  const minDist = (R * 2) + gap;
 
   useEffect(() => {
-    const n = deps.length;
-    posR.current = deps.map((_, i) => {
-      const a = (i / n) * 2 * Math.PI, r = 140 + Math.random() * 90;
-      return { x: W / 2 + r * Math.cos(a), y: H / 2 + r * Math.sin(a) };
-    });
+    if (!n) return;
+
+    // ── Hemisphere / dome placement ──
+    // Fibonacci sphere → project top hemisphere onto 2D ellipse
+    // This distributes points evenly over a dome shape
+    const cx = W / 2, cy = H / 2;
+    const radiusX = W / 2 - R - 20; // fill horizontal
+    const radiusY = H / 2 - R - 20; // fill vertical
+
+    const goldenRatio = (1 + Math.sqrt(5)) / 2;
+    const initPos = new Array(n);
+
+    for (let i = 0; i < n; i++) {
+      // Fibonacci sphere: distribute points on unit sphere
+      const theta = 2 * Math.PI * i / goldenRatio; // azimuthal angle
+      const phi = Math.acos(1 - (i + 0.5) / n);    // polar angle (0 to π)
+
+      // Only use top hemisphere (phi from 0 to π/2) for dome effect
+      const phiHemi = phi * 0.5; // compress to hemisphere
+
+      // Project 3D sphere point to 2D
+      // x = sin(phi)*cos(theta), y = sin(phi)*sin(theta), z = cos(phi) [unused]
+      const px = Math.sin(phiHemi) * Math.cos(theta);
+      const py = Math.sin(phiHemi) * Math.sin(theta);
+
+      initPos[i] = {
+        x: cx + px * radiusX,
+        y: cy + py * radiusY,
+      };
+    }
+
+    posR.current = initPos;
     velR.current = deps.map(() => ({ vx: 0, vy: 0 }));
+
+    // ── Force simulation — only repulsion + boundary, no gravity pulling to center ──
+    const repStr = minDist * minDist * 1.5;
+    const totalFrames = Math.min(250, 80 + n);
+
     let frame = 0;
     const run = () => {
       const p = posR.current, v = velR.current;
+      const cooling = Math.max(0.15, 1 - frame / totalFrames);
+
       for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          const dx = p[i].x - p[j].x, dy = p[i].y - p[j].y, d = Math.sqrt(dx * dx + dy * dy) || 1;
-          const f = 1600 / (d * d); v[i].vx += (dx / d) * f; v[i].vy += (dy / d) * f; v[j].vx -= (dx / d) * f; v[j].vy -= (dy / d) * f;
+        let fx = 0, fy = 0;
+
+        // Repulsion between nodes
+        for (let j = 0; j < n; j++) {
+          if (i === j) continue;
+          const dx = p[i].x - p[j].x, dy = p[i].y - p[j].y;
+          const d2 = dx * dx + dy * dy;
+          const d = Math.sqrt(d2) || 0.5;
+          if (d < minDist * 3) { // only nearby nodes for performance
+            const force = repStr / Math.max(d2, minDist * minDist * 0.1);
+            fx += (dx / d) * force;
+            fy += (dy / d) * force;
+          }
         }
-        v[i].vx += (W / 2 - p[i].x) * 0.007; v[i].vy += (H / 2 - p[i].y) * 0.007;
-        v[i].vx *= 0.84; v[i].vy *= 0.84;
-        p[i].x = Math.max(24, Math.min(W - 24, p[i].x + v[i].vx)); p[i].y = Math.max(24, Math.min(H - 24, p[i].y + v[i].vy));
+
+        // Very gentle pull toward center to prevent drift
+        fx += (cx - p[i].x) * 0.001;
+        fy += (cy - p[i].y) * 0.001;
+
+        // Elliptical boundary force — keep nodes inside the dome
+        const ex = (p[i].x - cx) / radiusX;
+        const ey = (p[i].y - cy) / radiusY;
+        const ed = ex * ex + ey * ey;
+        if (ed > 0.85) {
+          const pushBack = (ed - 0.85) * 8;
+          fx -= ex * pushBack * radiusX;
+          fy -= ey * pushBack * radiusY;
+        }
+
+        v[i].vx = (v[i].vx * 0.6 + fx * cooling);
+        v[i].vy = (v[i].vy * 0.6 + fy * cooling);
+
+        const spd = Math.sqrt(v[i].vx ** 2 + v[i].vy ** 2);
+        if (spd > 4) { v[i].vx *= 4 / spd; v[i].vy *= 4 / spd; }
+
+        p[i].x += v[i].vx;
+        p[i].y += v[i].vy;
+
+        // Hard clamp
+        p[i].x = Math.max(R + 5, Math.min(W - R - 5, p[i].x));
+        p[i].y = Math.max(R + 5, Math.min(H - R - 5, p[i].y));
       }
+
       frame++;
-      if (frame % 2 === 0) setPos(p.map(x => ({ ...x })));
-      if (frame < 160) raf.current = requestAnimationFrame(run);
+      if (frame % 2 === 0) setPos(p.map(pt => ({ ...pt })));
+      if (frame < totalFrames) raf.current = requestAnimationFrame(run);
     };
     raf.current = requestAnimationFrame(run);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
     return () => cancelAnimationFrame(raf.current);
-  }, []);
+  }, [deps]);
+
+  // Scroll-zoom
+  const onWheel = e => { e.preventDefault(); setZoom(z => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001))); };
+  // Drag-pan
+  const onMD = e => { setDragging(true); dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y }; };
+  const onMM = e => { if (dragging && dragStart.current) setPan({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }); };
+  const onMU = () => setDragging(false);
 
   const hovDep = hov !== null ? deps.find(d => d.id === hov) : null;
   const hovIdx = hov !== null ? deps.findIndex(d => d.id === hov) : -1;
 
+  // How many chars fit inside the node circle
+  const maxChars = Math.max(0, Math.floor((R * 2 - 4) / 5));
+
+  // Which nodes match the current search + severity filter
+  const isMatch = (d) => {
+    const matchSearch = !search || d.name.toLowerCase().includes(search.toLowerCase());
+    const matchSev = !sevFilter || d.sev === sevFilter;
+    return matchSearch && matchSev;
+  };
+  const matchCount = deps.filter(isMatch).length;
+
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-        <button className="btn btn-ghost" onClick={() => setZoom(z => Math.min(z + 0.2, 2.2))} style={{ padding: "6px 14px", fontSize: 12 }}>＋ Zoom In</button>
-        <button className="btn btn-ghost" onClick={() => setZoom(z => Math.max(z - 0.2, 0.4))} style={{ padding: "6px 14px", fontSize: 12 }}>－ Zoom Out</button>
-        <button className="btn btn-ghost" onClick={() => setZoom(1)} style={{ padding: "6px 14px", fontSize: 12 }}>↺ Reset</button>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-          {[["var(--red)", "Critical"], ["var(--orange)", "High"], ["var(--yellow)", "Medium"], ["var(--amber)", "Low"], ["var(--teal)", "Safe"]].map(([c, l]) => (
-            <span key={l} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text2)" }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: c, boxShadow: `0 0 4px ${c}66`, flexShrink: 0 }} />
-              {l}
-            </span>
-          ))}
+      {/* Toolbar row 1: zoom + search */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="btn btn-ghost" onClick={() => setZoom(z => Math.min(z + 0.2, 3))} style={{ padding: "6px 14px", fontSize: 12 }}>＋ Zoom In</button>
+        <button className="btn btn-ghost" onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))} style={{ padding: "6px 14px", fontSize: 12 }}>－ Zoom Out</button>
+        <button className="btn btn-ghost" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} style={{ padding: "6px 14px", fontSize: 12 }}>↺ Reset</button>
+        <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--mono)" }}>{Math.round(zoom * 100)}%</span>
+        <div style={{ marginLeft: "auto", position: "relative", display: "flex", alignItems: "center" }}>
+          <span style={{ position: "absolute", left: 10, fontSize: 13, color: "var(--text3)", pointerEvents: "none" }}>🔍</span>
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search package..."
+            style={{ padding: "7px 12px 7px 30px", fontSize: 12, width: 200, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg1)", color: "var(--text)", fontFamily: "var(--mono)", outline: "none" }} />
+          {search && <button onClick={() => setSearch("")} style={{ position: "absolute", right: 6, background: "none", border: "none", color: "var(--text3)", cursor: "pointer", fontSize: 14, padding: 2 }}>✕</button>}
         </div>
       </div>
-      <div style={{ border: "1px solid var(--border2)", borderRadius: 12, overflow: "hidden", background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 1px 0 rgba(57, 62, 70,0.04)" }}>
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", cursor: "grab", display: "block" }} onClick={() => setHov(null)}>
+      {/* Toolbar row 2: severity filter pills */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={() => setSevFilter(null)}
+          style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 20, border: !sevFilter ? "1.5px solid var(--primary)" : "1px solid var(--border)", background: !sevFilter ? "var(--primary-bg)" : "transparent", color: !sevFilter ? "var(--text)" : "var(--text3)", fontSize: 12, cursor: "pointer", fontWeight: !sevFilter ? 600 : 400, fontFamily: "var(--ui)", transition: "all 0.15s" }}>
+          All <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>({n})</span>
+        </button>
+        {[["var(--red)", "CRITICAL", "Critical"], ["var(--orange)", "HIGH", "High"], ["var(--yellow)", "MEDIUM", "Medium"], ["var(--amber)", "LOW", "Low"], ["var(--teal)", "SAFE", "Safe"]].map(([c, sev, label]) => {
+          const cnt = deps.filter(d => d.sev === sev).length;
+          const active = sevFilter === sev;
+          return (
+            <button key={sev} onClick={() => setSevFilter(active ? null : sev)}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 20, border: active ? `1.5px solid ${c}` : "1px solid var(--border)", background: active ? `color-mix(in srgb, ${c} 12%, transparent)` : "transparent", color: active ? c : "var(--text3)", fontSize: 12, cursor: "pointer", fontWeight: active ? 600 : 400, fontFamily: "var(--ui)", transition: "all 0.15s" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: c, boxShadow: active ? `0 0 6px ${c}` : `0 0 3px ${c}44`, flexShrink: 0 }} />
+              {label} <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>({cnt})</span>
+            </button>
+          );
+        })}
+        {(search || sevFilter) && <span style={{ fontSize: 11, color: "var(--text3)", fontFamily: "var(--mono)", marginLeft: 8 }}>{matchCount} of {n} shown</span>}
+      </div>
+      <div style={{ border: "1px solid var(--border2)", borderRadius: 12, overflow: "hidden", background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 1px 0 rgba(57,62,70,0.04)" }}
+        onWheel={onWheel} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", cursor: dragging ? "grabbing" : "grab", display: "block" }} onClick={() => setHov(null)}>
           <defs>
             <radialGradient id="gbg" cx="50%" cy="50%">
               <stop offset="0%" stopColor="#0f1729" />
               <stop offset="100%" stopColor="#060b18" />
             </radialGradient>
+            {/* Clip each node's text to its circle */}
+            {deps.map((d, i) => pos[i] ? (
+              <clipPath key={`cp${d.id}`} id={`clip-${d.id}`}>
+                <circle cx={pos[i].x} cy={pos[i].y} r={R - 2} />
+              </clipPath>
+            ) : null)}
           </defs>
           <rect width={W} height={H} fill="url(#gbg)" />
-          {[...Array(6)].map((_, i) => <line key={`h${i}`} x1={0} y1={(i / 5) * H} x2={W} y2={(i / 5) * H} stroke="rgba(57, 62, 70,0.02)" strokeWidth={1} />)}
-          {[...Array(9)].map((_, i) => <line key={`v${i}`} x1={(i / 8) * W} y1={0} x2={(i / 8) * W} y2={H} stroke="rgba(57, 62, 70,0.02)" strokeWidth={1} />)}
-          <g transform={`translate(${W / 2 * (1 - zoom)},${H / 2 * (1 - zoom)}) scale(${zoom})`}>
+          {/* Subtle grid */}
+          {[...Array(8)].map((_, i) => <line key={`h${i}`} x1={0} y1={(i / 7) * H} x2={W} y2={(i / 7) * H} stroke="rgba(57,62,70,0.018)" strokeWidth={0.5} />)}
+          {[...Array(13)].map((_, i) => <line key={`v${i}`} x1={(i / 12) * W} y1={0} x2={(i / 12) * W} y2={H} stroke="rgba(57,62,70,0.018)" strokeWidth={0.5} />)}
+          {/* Dome outline (decorative ellipse) */}
+          <ellipse cx={W / 2} cy={H / 2} rx={W / 2 - 15} ry={H / 2 - 15} fill="none" stroke="rgba(57,62,70,0.03)" strokeWidth={1} strokeDasharray="6 8" />
+          <ellipse cx={W / 2} cy={H / 2} rx={W / 3} ry={H / 3} fill="none" stroke="rgba(57,62,70,0.02)" strokeWidth={0.5} strokeDasharray="4 8" />
+
+          <g transform={`translate(${W / 2 * (1 - zoom) + pan.x * 0.5},${H / 2 * (1 - zoom) + pan.y * 0.5}) scale(${zoom})`}>
+            {/* Edges — subtle connectors between neighboring nodes */}
             {deps.map((d, i) => {
               if (!pos[i]) return null;
-              return deps.slice(i + 1, i + 3).map(t => {
-                const ti = deps.indexOf(t); if (!pos[ti]) return null;
-                return <line key={`${d.id}-${t.id}`} x1={pos[i].x} y1={pos[i].y} x2={pos[ti].x} y2={pos[ti].y} stroke={hov === d.id || hov === t.id ? "rgba(57, 62, 70, 0.4)" : "rgba(57, 62, 70,0.03)"} strokeWidth={hov === d.id || hov === t.id ? 1.5 : 1} style={{ transition: 'stroke 0.2s ease, stroke-width 0.2s ease' }} />;
-              });
+              const next = deps[i + 1];
+              if (!next) return null;
+              const ni = i + 1;
+              if (!pos[ni]) return null;
+              const isActive = hov === d.id || hov === next.id;
+              return <line key={`e${d.id}`} x1={pos[i].x} y1={pos[i].y} x2={pos[ni].x} y2={pos[ni].y}
+                stroke={isActive ? "rgba(100,160,220,0.25)" : "rgba(57,62,70,0.02)"}
+                strokeWidth={isActive ? 1.2 : 0.4}
+                style={{ transition: "stroke 0.2s, stroke-width 0.2s" }} />;
             })}
+            {/* Nodes */}
             {deps.map((d, i) => {
               if (!pos[i]) return null;
-              const { x, y } = pos[i], r = Math.max(7, Math.min(19, d.sz / 2)), isH = hov === d.id;
+              const { x, y } = pos[i], isH = hov === d.id;
+              const matched = isMatch(d);
+              const cr = isH ? R + 3 : R;
+              const isSearchHit = search && d.name.toLowerCase().includes(search.toLowerCase());
               return (
                 <g key={d.id} onClick={e => { e.stopPropagation(); onPick(d); }}
-                  onMouseEnter={() => setHov(d.id)} onMouseLeave={() => setHov(null)} style={{ cursor: "pointer" }}>
-                  {isH && <circle cx={x} cy={y} r={r + 9} fill="none" stroke={d.col} strokeWidth={1} strokeOpacity={0.25} />}
-                  {isH && <circle cx={x} cy={y} r={r + 5} fill="none" stroke={d.col} strokeWidth={1} strokeOpacity={0.15} />}
-                  <circle cx={x} cy={y} r={isH ? r + 2 : r} fill={`color-mix(in srgb, ${d.col} 15%, transparent)`} stroke={d.col} strokeWidth={isH ? 2 : 1.5} style={{ filter: isH ? `drop-shadow(0 0 10px ${d.col})` : `drop-shadow(0 0 3px color-mix(in srgb, ${d.col} 40%, transparent))`, transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)" }} />
-                  {r > 9 && <text x={x} y={y + 1} textAnchor="middle" dominantBaseline="middle" fill={d.col} fontSize={Math.max(6, r * 0.52)} fontFamily="JetBrains Mono" fontWeight="700" style={{ pointerEvents: "none" }}>{d.name.slice(0, 7)}</text>}
+                  onMouseEnter={() => setHov(d.id)} onMouseLeave={() => setHov(null)}
+                  style={{ cursor: "pointer", opacity: matched ? 1 : 0.12, transition: "opacity 0.25s ease" }}>
+                  {isH && <circle cx={x} cy={y} r={R + 12} fill="none" stroke={d.col} strokeWidth={1} strokeOpacity={0.25} />}
+                  {isH && <circle cx={x} cy={y} r={R + 7} fill="none" stroke={d.col} strokeWidth={1} strokeOpacity={0.12} />}
+                  <circle cx={x} cy={y} r={cr}
+                    fill={`color-mix(in srgb, ${d.col} 18%, transparent)`}
+                    stroke={d.col} strokeWidth={isH ? 2.5 : isSearchHit ? 2 : 1.5}
+                    style={{
+                      color: d.col,
+                      filter: isH ? `drop-shadow(0 0 14px ${d.col})` : isSearchHit ? `drop-shadow(0 0 8px ${d.col})` : `drop-shadow(0 0 3px color-mix(in srgb, ${d.col} 40%, transparent))`,
+                      transition: "all 0.2s cubic-bezier(0.16,1,0.3,1)",
+                      ...(isSearchHit && !isH ? { animation: "breathe 2s ease-in-out infinite" } : {})
+                    }} />
+                  {/* Label — clipped to stay inside the circle */}
+                  {maxChars >= 2 && (
+                    <text x={x} y={y + 1} textAnchor="middle" dominantBaseline="middle" fill={d.col}
+                      fontSize={Math.max(5, Math.min(8, R * 0.7))} fontFamily="JetBrains Mono" fontWeight="700"
+                      clipPath={`url(#clip-${d.id})`}
+                      style={{ pointerEvents: "none" }}>
+                      {d.name.length > maxChars ? d.name.slice(0, maxChars) : d.name}
+                    </text>
+                  )}
                 </g>
               );
             })}
+            {/* Hover tooltip */}
             {hov !== null && hovIdx >= 0 && pos[hovIdx] && (() => {
               const { x, y } = pos[hovIdx], dep = hovDep;
+              const nameLen = dep.name.length;
+              const tw = Math.max(160, Math.min(280, nameLen * 8.5 + 28)), th = 74;
+              const tx = x + R + 10 + tw > W ? x - tw - R - 5 : x + R + 8;
+              const tyRaw = y - th / 2;
+              const ty = Math.max(4, Math.min(H - th - 4, tyRaw));
+              const displayName = dep.name.length > 28 ? dep.name.slice(0, 26) + "…" : dep.name;
               return (
                 <g style={{ pointerEvents: "none" }}>
-                  <rect x={x + 14} y={y - 34} width={150} height={64} rx={8} fill="var(--bg2)" stroke={dep.col} strokeWidth={1.5} style={{ filter: "drop-shadow(0 10px 15px rgba(0,0,0,0.5))" }} />
-                  <text x={x + 22} y={y - 15} fill={dep.col} fontSize={13} fontFamily="JetBrains Mono" fontWeight="700">{dep.name}</text>
-                  <text x={x + 22} y={y + 2} fill="var(--text2)" fontSize={11} fontFamily="Inter">v{dep.version}</text>
-                  <text x={x + 22} y={y + 17} fill="var(--text2)" fontSize={11} fontFamily="JetBrains Mono">CVSS {dep.score.toFixed(1)}</text>
+                  <rect x={tx} y={ty} width={tw} height={th} rx={9} fill="var(--bg2)" stroke={dep.col} strokeWidth={1.5} style={{ filter: "drop-shadow(0 8px 20px rgba(0,0,0,0.6))" }} />
+                  <text x={tx + 12} y={ty + 20} fill={dep.col} fontSize={13} fontFamily="JetBrains Mono" fontWeight="700">{displayName}</text>
+                  <text x={tx + 12} y={ty + 38} fill="var(--text2)" fontSize={11} fontFamily="Inter">v{dep.version}</text>
+                  <text x={tx + 12} y={ty + 55} fill="var(--text2)" fontSize={11} fontFamily="JetBrains Mono">CVSS {dep.score.toFixed(1)} · {dep.sev}</text>
                 </g>
               );
             })()}
@@ -588,9 +756,12 @@ export default function App() {
   const [theme, setTheme] = useState("light");
   const [phase, setPhase] = useState("input"); // input | pipeline | main
   const [tab, setTab] = useState("dashboard");
+  const [inputTab, setInputTab] = useState("url"); // url | file
   const [step, setStep] = useState(-1);
   const [done, setDone] = useState([]);
-  const [url, setUrl] = useState("https://github.com/demo/react-ecommerce-app");
+  const [url, setUrl] = useState("");
+  const [scanResult, setScanResult] = useState(null);
+  const [scanError, setScanError] = useState("");
   const [sel, setSel] = useState(null);
   const [filt, setFilt] = useState("All");
   const [sCol, setSCol] = useState("score");
@@ -613,35 +784,118 @@ export default function App() {
     { id: "ai", label: "AI Insights", icon: "◈" },
   ];
 
-  const scan = async () => {
+  const API = "http://localhost:5000";
+
+  const runPipeline = async (backendPromise) => {
     setPhase("pipeline"); setStep(-1); setDone([]);
-    for (let i = 0; i < PIPE.length; i++) {
-      await new Promise(r => setTimeout(r, 150)); setStep(i);
-      await new Promise(r => setTimeout(r, 660));
+    // Run through steps 1 to 7
+    for (let i = 0; i < PIPE.length - 1; i++) {
+      await new Promise(r => setTimeout(r, 120)); setStep(i);
+      await new Promise(r => setTimeout(r, 600));
       setDone(p => [...p, i]);
     }
-    await new Promise(r => setTimeout(r, 300));
-    setPhase("main"); setTab("dashboard");
+    // Final step: wait for BOTH the timing and the backend to be ready
+    setStep(PIPE.length - 1);
+    await Promise.all([
+      new Promise(r => setTimeout(r, 800)),
+      backendPromise
+    ]);
+    setDone(p => [...p, PIPE.length - 1]);
+    await new Promise(r => setTimeout(r, 400));
   };
 
-  const crit = DEPS.filter(d => d.sev === "CRITICAL").length;
-  const upg = DEPS.filter(d => d.version !== d.fixv && d.sev !== "SAFE").length;
-  const aband = DEPS.filter(d => d.maint === "Abandoned").length;
-  const risk = Math.min(98, Math.round((crit * 15 + DEPS.filter(d => d.sev === "HIGH").length * 8 + DEPS.filter(d => d.sev === "MEDIUM").length * 4) / DEPS.length * 10));
+  const startURLScan = async () => {
+    if (!url.trim()) return;
+    setScanError("");
+    const fetchPromise = fetch(`${API}/api/scan`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repoUrl: url }),
+    }).then(r => r.json()).catch(err => ({ error: err.message }));
+
+    await runPipeline(fetchPromise);
+    const result = await fetchPromise;
+
+    if (result.error) { setScanError(result.error); setPhase("input"); return; }
+    if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
+    else { setScanError("Unexpected response from server."); setPhase("input"); }
+  };
+
+  const startFileScan = async (file) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      let content;
+      try { content = JSON.parse(e.target.result); } catch (_) { setScanError("Invalid JSON file"); return; }
+      setScanError("");
+      
+      const fetchPromise = fetch(`${API}/api/scan-file`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, content }),
+      }).then(r => r.json()).catch(err => ({ error: err.message }));
+
+      await runPipeline(fetchPromise);
+      const result = await fetchPromise;
+
+      if (result.error) { setScanError(result.error); setPhase("input"); return; }
+      if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
+      else { setScanError("Unexpected response from server."); setPhase("input"); }
+    };
+    reader.readAsText(file);
+  };
+
+  // Use real scan data when available, fallback to mock DEPS
+  const activeDeps = scanResult || DEPS;
+
+  const crit = activeDeps.filter(d => d.sev === "CRITICAL").length;
+  const upg = activeDeps.filter(d => d.version !== d.fixv && d.sev !== "SAFE").length;
+  const aband = activeDeps.filter(d => d.maint === "Abandoned").length;
+  const risk = Math.min(98, Math.round((crit * 15 + activeDeps.filter(d => d.sev === "HIGH").length * 8 + activeDeps.filter(d => d.sev === "MEDIUM").length * 4) / activeDeps.length * 10));
   const grade = risk > 70 ? "D" : risk > 50 ? "C" : risk > 30 ? "B" : "A";
   const gc = risk > 70 ? "var(--red)" : risk > 50 ? "var(--orange)" : risk > 30 ? "var(--amber)" : "var(--teal)";
 
-  const rows = [...DEPS]
+  const rows = [...activeDeps]
     .filter(d => filt === "All" || d.sev === filt)
     .sort((a, b) => { let av = a[sCol], bv = b[sCol]; if (typeof av === "string") { av = av.toLowerCase(); bv = bv.toLowerCase(); } return sDir === "asc" ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1); });
 
   const doSort = c => { if (sCol === c) setSDir(d => d === "asc" ? "desc" : "asc"); else { setSCol(c); setSDir("desc"); } };
 
+  const localAdvisor = (query, deps) => {
+    const q = query.toLowerCase();
+    const vd = deps.filter(d => d.sev !== "SAFE");
+    if (q.includes("critical") || q.includes("most important") || q.includes("patch first")) {
+      const top = vd.sort((a, b) => b.score - a.score).slice(0, 3);
+      if (!top.length) return "Your project has no known vulnerabilities! Great job.";
+      return `### 🚨 Top Critical Risks\nBased on your scan, here are the most urgent packages to address:\n\n` + 
+        top.map(d => `- **${d.name}** (v${d.version}): Score **${d.score}** (${d.sev}). ${d.desc}`).join("\n") +
+        "\n\n**Recommendation:** Use the 'Fix Plan' tab to generate remediation commands for these packages.";
+    }
+    if (q.includes("fix") || q.includes("plan") || q.includes("how to")) {
+      const canFix = vd.filter(d => d.fix).length;
+      return `### 🛠️ Remediation Plan\nI've analyzed ${vd.length} vulnerabilities. ${canFix} of them have direct upgrade paths available.\n\n` +
+        `- **Immediate:** Upgrade the ${canFix} packages with known fixes using the 'Fix Plan' tab.\n` +
+        `- **Manual:** For packages without a direct fix, consider switching to the suggested alternatives.\n` +
+        `- **Strategy:** Always prioritize libraries with CVSS scores above 7.0 (High/Critical).`;
+    }
+    if (q.includes("explain") || q.includes("what is") || q.includes("about")) {
+      const pkg = vd.find(d => q.includes(d.name.toLowerCase()));
+      if (pkg) return `### 🔍 About ${pkg.name}\n${pkg.desc}\n\n- **Severity:** ${pkg.sev}\n- **NVD Score:** ${pkg.score}\n- **CVEs:** ${pkg.cves.join(", ") || "None"}\n- **Latest Version:** ${pkg.latest}`;
+      return "I can explain any vulnerable package in your list. Try asking 'What is lodash?' or similar.";
+    }
+    return `### ◈ DepShield Local Advisor\nI'm analyzing your ${deps.length} dependencies locally.\n\n- **Status:** ${vd.length > 0 ? "Vulnerable" : "Secure"}\n- **Risk Score:** ${risk}/100\n- **Grade:** ${grade}\n\nI recommend addressing the ${vd.filter(d => d.sev === "CRITICAL").length} Critical and ${vd.filter(d => d.sev === "HIGH").length} High severity issues first. You can ask me about specific packages or for a fix plan.`;
+  };
+
   const ask = async q => {
-    if (!key.trim()) { setAErr("Please enter your Gemini API key."); return; }
     if (!q.trim()) return;
     setALoad(true); setResp(""); setAErr("");
-    const vd = DEPS.filter(d => d.sev !== "SAFE").map(d => ({ name: d.name, version: d.version, severity: d.sev, score: d.score, cves: d.cves }));
+    
+    // Fallback to local advisor if no key
+    if (!key.trim()) {
+      await new Promise(r => setTimeout(r, 600)); // Simulate "thought"
+      setResp(localAdvisor(q, activeDeps));
+      setALoad(false);
+      return;
+    }
+
+    const vd = activeDeps.filter(d => d.sev !== "SAFE").map(d => ({ name: d.name, version: d.version, severity: d.sev, score: d.score, cves: d.cves }));
     try {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -654,7 +908,7 @@ export default function App() {
     finally { setALoad(false); }
   };
 
-  const fixes = DEPS.filter(d => d.sev !== "SAFE" && d.fix).sort((a, b) => b.score - a.score);
+  const fixes = activeDeps.filter(d => d.sev !== "SAFE" && d.fix).sort((a, b) => b.score - a.score);
 
   // ── helpers ──
   const Stat = ({ label, val, color, sub }) => (
@@ -672,6 +926,15 @@ export default function App() {
     </div>
   );
 
+  const goHome = () => {
+    setPhase("input");
+    setScanResult(null);
+    setScanError("");
+    setTab("dashboard");
+    setSel(null);
+    setUrl("");
+  };
+
   return (
     <>
       <style>{G}</style>
@@ -683,7 +946,7 @@ export default function App() {
         position: "sticky", top: 0, zIndex: 50, backdropFilter: "blur(12px)",
         boxShadow: "var(--shadow-sm)", transition: "background 0.3s ease"
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginRight: 48, flexShrink: 0 }}>
+        <div onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 12, marginRight: 48, flexShrink: 0, cursor: "pointer" }}>
           <div style={{ width: 32, height: 32, background: "var(--primary)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "var(--bg)", boxShadow: "var(--shadow-md)" }}>✦</div>
           <span style={{ fontFamily: "var(--head)", fontSize: 16, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em" }}>DepShield</span>
         </div>
@@ -707,7 +970,7 @@ export default function App() {
           {phase === "main" && (
             <>
               <div style={{ width: 1, height: 20, background: "var(--border)", marginRight: 4 }} />
-              <span style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--mono)" }}>react-ecommerce-app</span>
+              <span style={{ fontSize: 12, color: "var(--text3)", fontFamily: "var(--mono)" }}>{url || "scanned project"}</span>
               <span style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(16, 185, 129, 0.08)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: 20, padding: "4px 12px", fontSize: 11, color: "var(--green)" }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--green)", animation: "pulse-dot 2s ease-in-out infinite" }} />
                 Scan complete
@@ -740,46 +1003,48 @@ export default function App() {
             </div>
 
             <div className="card fade-up" style={{ padding: 32 }}>
-              <div style={{ marginBottom: 26 }}>
-                <label className="label" style={{ display: "block", marginBottom: 10 }}>GitHub Repository URL</label>
-                <input type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/repo" />
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 26 }}>
-                <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-                <span style={{ color: "var(--text3)", fontSize: 11, fontWeight: 600, letterSpacing: "0.05em" }}>OR UPLOAD MANIFEST</span>
-                <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-              </div>
-
-              <label onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "rgba(57, 62, 70, 0.4)"; e.currentTarget.style.background = "var(--primary-bg)"; }}
-                onDragLeave={e => { e.currentTarget.style.borderColor = "var(--border2)"; e.currentTarget.style.background = "transparent"; }}
-                style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1.5px dashed var(--border2)", borderRadius: 12, padding: "28px 20px", cursor: "pointer", gap: 10, marginBottom: 28, transition: "all 0.2s", textAlign: "center" }}>
-                <div style={{ width: 44, height: 44, background: "var(--primary-bg)", border: "1px solid rgba(57, 62, 70, 0.15)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📦</div>
-                <div>
-                  <div style={{ color: "var(--text2)", fontSize: 13, fontWeight: 500 }}>Drop your manifest file here</div>
-                  <div style={{ color: "var(--text3)", fontSize: 12, marginTop: 3 }}>package.json · requirements.txt · pom.xml</div>
-                </div>
-                <input type="file" accept=".json,.txt,.xml" style={{ display: "none" }} onChange={() => { }} />
-              </label>
-
-              <button onClick={scan} style={{
-                width: "100%", background: "linear-gradient(135deg,rgba(57, 62, 70, 0.15),rgba(57, 62, 70, 0.15))",
-                border: "1px solid rgba(57, 62, 70, 0.3)", borderRadius: 11, padding: "15px",
-                color: "var(--primary)", fontSize: 14, fontFamily: "var(--ui)", fontWeight: 600, cursor: "pointer",
-                animation: "glow-pulse 2.5s ease-in-out infinite", transition: "all 0.2s", letterSpacing: "0.02em",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 10
-              }}>
-                <span style={{ fontSize: 16 }}>✦</span> Analyze Dependencies
-              </button>
-
-              <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 24 }}>
-                {[["28", "Dependencies"], ["23", "Vulnerabilities"], ["5", "Safe packages"]].map(([n, l]) => (
-                  <div key={l} style={{ textAlign: "center" }}>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: "var(--primary)" }}>{n}</div>
-                    <div style={{ color: "var(--text3)", fontSize: 11, marginTop: 2 }}>{l}</div>
-                  </div>
+              {/* Tab Switcher */}
+              <div style={{ display: "flex", gap: 0, marginBottom: 24, background: "var(--surface)", borderRadius: 10, padding: 3, border: "1px solid var(--border)" }}>
+                {[{ id: "url", label: "🔗 GitHub URL" }, { id: "file", label: "📦 Upload File" }].map(t => (
+                  <button key={t.id} onClick={() => setInputTab(t.id)}
+                    style={{ flex: 1, background: inputTab === t.id ? "var(--bg)" : "transparent", border: "none", padding: "10px 16px", borderRadius: 8, cursor: "pointer", color: inputTab === t.id ? "var(--text)" : "var(--text3)", fontWeight: 600, fontSize: 13, fontFamily: "var(--ui)", transition: "all 0.2s", boxShadow: inputTab === t.id ? "var(--shadow-sm)" : "none" }}>
+                    {t.label}
+                  </button>
                 ))}
               </div>
+
+              {scanError && <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: 10, padding: "12px 16px", marginBottom: 20, color: "var(--red)", fontSize: 13 }}>{scanError}</div>}
+
+              {inputTab === "url" ? (
+                <div>
+                  <div style={{ marginBottom: 20 }}>
+                    <label className="label" style={{ display: "block", marginBottom: 10 }}>GitHub Repository URL</label>
+                    <input type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/repo" />
+                  </div>
+                  <button onClick={startURLScan} style={{
+                    width: "100%", background: "linear-gradient(135deg,rgba(57, 62, 70, 0.15),rgba(57, 62, 70, 0.15))",
+                    border: "1px solid rgba(57, 62, 70, 0.3)", borderRadius: 11, padding: "15px",
+                    color: "var(--primary)", fontSize: 14, fontFamily: "var(--ui)", fontWeight: 600, cursor: "pointer",
+                    animation: "glow-pulse 2.5s ease-in-out infinite", transition: "all 0.2s", letterSpacing: "0.02em",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 10
+                  }}>
+                    <span style={{ fontSize: 16 }}>✦</span> Analyze Dependencies
+                  </button>
+                </div>
+              ) : (
+                <label onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "rgba(57, 62, 70, 0.4)"; e.currentTarget.style.background = "var(--primary-bg)"; }}
+                  onDragLeave={e => { e.currentTarget.style.borderColor = "var(--border2)"; e.currentTarget.style.background = "transparent"; }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "var(--border2)"; e.currentTarget.style.background = "transparent"; const file = e.dataTransfer.files[0]; if (file) startFileScan(file); }}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1.5px dashed var(--border2)", borderRadius: 12, padding: "40px 20px", cursor: "pointer", gap: 10, transition: "all 0.2s", textAlign: "center" }}>
+                  <div style={{ width: 52, height: 52, background: "var(--primary-bg)", border: "1px solid rgba(57, 62, 70, 0.15)", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>📦</div>
+                  <div>
+                    <div style={{ color: "var(--text2)", fontSize: 14, fontWeight: 600 }}>Drop your manifest file here</div>
+                    <div style={{ color: "var(--text3)", fontSize: 12, marginTop: 4 }}>package.json · package-lock.json</div>
+                  </div>
+                  <div style={{ color: "var(--text3)", fontSize: 11, marginTop: 4 }}>or click to browse</div>
+                  <input type="file" accept=".json" style={{ display: "none" }} onChange={(e) => { const file = e.target.files[0]; if (file) startFileScan(file); }} />
+                </label>
+              )}
             </div>
           </div>
         )}
@@ -831,7 +1096,7 @@ export default function App() {
               <div className="fade-up">
                 {/* Stats row */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr) 100px 86px", gap: 14, marginBottom: 24 }}>
-                  <Stat label="Total Scanned" val={28} color="var(--primary)" sub="npm packages" />
+                  <Stat label="Total Scanned" val={activeDeps.length} color="var(--primary)" sub="npm packages" />
                   <Stat label="Critical Vulns" val={crit} color="var(--red)" sub="Immediate action" />
                   <Stat label="Need Upgrade" val={upg} color="var(--orange)" sub="Outdated versions" />
                   <Stat label="Abandoned Libs" val={aband} color="var(--amber)" sub="No maintainer" />
@@ -855,7 +1120,7 @@ export default function App() {
                       <Chip sev="CRITICAL" />
                     </div>
                     <div>
-                      {DEPS.filter(d => d.sev === "CRITICAL").map(d => (
+                      {activeDeps.filter(d => d.sev === "CRITICAL").map(d => (
                         <div key={d.id} onClick={() => setSel(d)} className="card-hoverable" style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", transition: "background 0.2s" }}>
                           <div>
                             <div style={{ fontWeight: 600, fontSize: 14 }}>{d.name} <span style={{ color: "var(--text3)", fontWeight: 400 }}>v{d.version}</span></div>
@@ -877,7 +1142,7 @@ export default function App() {
                     </div>
                     <div style={{ padding: "20px" }}>
                       {["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"].map(s => {
-                        const cnt = DEPS.filter(d => d.sev === s).length, pct = (cnt / 28) * 100, c = SEV[s];
+                        const cnt = activeDeps.filter(d => d.sev === s).length, pct = activeDeps.length ? (cnt / activeDeps.length) * 100 : 0, c = SEV[s];
                         return (
                           <div key={s} style={{ marginBottom: 16 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -898,10 +1163,10 @@ export default function App() {
                 <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                   <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
                     <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Abandoned &amp; Inactive Libraries</h3>
-                    <span className="tag" style={{ background: "rgba(240,165,0,0.1)", color: "var(--amber)", border: "1px solid rgba(240,165,0,0.25)" }}>{DEPS.filter(d => d.maint !== "Active").length} found</span>
+                    <span className="tag" style={{ background: "rgba(240,165,0,0.1)", color: "var(--amber)", border: "1px solid rgba(240,165,0,0.25)" }}>{activeDeps.filter(d => d.maint !== "Active").length} found</span>
                   </div>
                   <div style={{ padding: 20, display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(195px,1fr))", gap: 10 }}>
-                    {DEPS.filter(d => d.maint !== "Active").map(d => (
+                    {activeDeps.filter(d => d.maint !== "Active").map(d => (
                       <div key={d.id} onClick={() => setSel(d)} className="card"
                         style={{ padding: "14px 16px", cursor: "pointer", border: `1px solid ${d.maint === "Abandoned" ? "rgba(240,165,0,0.25)" : "var(--border)"}`, transition: "all 0.15s" }}
                         onMouseEnter={e => e.currentTarget.style.borderColor = d.maint === "Abandoned" ? "rgba(240,165,0,0.45)" : "var(--border2)"}
@@ -924,9 +1189,9 @@ export default function App() {
               <div className="fade-up">
                 <div style={{ marginBottom: 22 }}>
                   <h2 className="section-title">Dependency Graph</h2>
-                  <p style={{ color: "var(--text2)", fontSize: 13, marginTop: 5 }}>Force-directed visualization — click any node to inspect · {DEPS.length} packages mapped</p>
+                  <p style={{ color: "var(--text2)", fontSize: 13, marginTop: 5 }}>Force-directed visualization — click any node to inspect · {activeDeps.length} packages mapped</p>
                 </div>
-                <Graph deps={DEPS} onPick={setSel} />
+                <Graph deps={activeDeps} onPick={setSel} />
               </div>
             )}
 
@@ -1045,18 +1310,31 @@ export default function App() {
             {/* ── AI INSIGHTS ── */}
             {tab === "ai" && (
               <div className="fade-up" style={{ maxWidth: 820 }}>
-                <div style={{ marginBottom: 24 }}>
-                  <h2 className="section-title">AI Security Insights</h2>
-                  <p style={{ color: "var(--text2)", fontSize: 13, marginTop: 5 }}>Gemini 2.0 Flash analyzes your scan results and provides expert remediation guidance</p>
+                <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+                  <div>
+                    <h2 className="section-title">AI Security Insights</h2>
+                    <p style={{ color: "var(--text2)", fontSize: 13, marginTop: 5 }}>Expert remediation guidance for your scanned dependencies</p>
+                  </div>
+                  <span className="tag" style={{ 
+                    background: key ? "rgba(57, 62, 70, 0.1)" : "rgba(16, 185, 129, 0.1)", 
+                    color: key ? "var(--primary)" : "var(--green)", 
+                    border: `1px solid ${key ? "var(--primary)" : "var(--green)"}33`,
+                    padding: "4px 10px"
+                  }}>
+                    {key ? "✧ Advanced Mode" : "◈ Free Tier Active"}
+                  </span>
                 </div>
 
                 {/* API key */}
                 <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-                  <label className="label" style={{ display: "block", marginBottom: 10 }}>Gemini API Key</label>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                    <label className="label">Gemini API Key</label>
+                    <span style={{ fontSize: 11, color: "var(--text3)" }}>Optional for basic insights</span>
+                  </div>
                   <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                     <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="AIza... — paste your key" />
                     <span style={{ color: key ? "var(--green)" : "var(--text3)", fontSize: 12, whiteSpace: "nowrap", fontWeight: 500 }}>
-                      {key ? "✓ Set" : "Not set"}
+                      {key ? "✓ Active" : "Local Only"}
                     </span>
                   </div>
                 </div>
