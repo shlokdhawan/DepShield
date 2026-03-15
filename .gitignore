@@ -25,3 +25,14 @@ dist-ssr
 
 # Platform Metadata
 .orchids
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
