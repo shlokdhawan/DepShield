@@ -44,4 +44,4 @@ npm run build
 
 ---
 
-*This project was personalized from a generic template to serve as a focused security tool.*
+
