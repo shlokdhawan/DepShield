@@ -339,16 +339,21 @@ function GaugeArc({ value, size = 100 }) {
   const r = (size - 12) / 2;
   const circ = 2 * Math.PI * r;
   const fill = (value / 100) * circ;
-  const c = value > 70 ? "var(--red)" : value > 50 ? "var(--orange)" : value > 30 ? "var(--amber)" : "var(--teal)";
+  const c = value >= 75 ? "var(--teal)" : value >= 55 ? "var(--amber)" : value >= 35 ? "var(--orange)" : "var(--red)";
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg2)" strokeWidth={7} />
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={c} strokeWidth={7}
-        strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        style={{ filter: value > 50 ? `drop-shadow(0 0 4px ${c}88)` : 'none', transition: "stroke-dasharray 1.2s cubic-bezier(0.16, 1, 0.3, 1)" }} />
-      <text x={size / 2} y={size / 2 + 1} textAnchor="middle" dominantBaseline="middle" fill={c} fontSize={size / 4.5} fontFamily="JetBrains Mono" fontWeight="700">{value}</text>
-    </svg>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg2)" strokeWidth={7} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={c} strokeWidth={7}
+          strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          style={{ filter: value > 50 ? `drop-shadow(0 0 4px ${c}88)` : 'none', transition: "stroke-dasharray 1.2s cubic-bezier(0.16, 1, 0.3, 1)" }} />
+        <text x={size / 2} y={size / 2 + 1} textAnchor="middle" dominantBaseline="middle" fill={c} fontSize={size / 4} fontFamily="JetBrains Mono" fontWeight="700">
+          <CountUp n={value} />
+        </text>
+      </svg>
+      <div className="label" style={{ fontSize: 10, opacity: 0.8 }}>Security Score</div>
+    </div>
   );
 }
 
@@ -844,13 +849,22 @@ export default function App() {
 
   // Use real scan data when available, fallback to mock DEPS
   const activeDeps = scanResult || DEPS;
-
+  const total = activeDeps.length || 1;
   const crit = activeDeps.filter(d => d.sev === "CRITICAL").length;
+  const high = activeDeps.filter(d => d.sev === "HIGH").length;
+  const med = activeDeps.filter(d => d.sev === "MEDIUM").length;
+  const low = activeDeps.filter(d => d.sev === "LOW").length;
+
   const upg = activeDeps.filter(d => d.version !== d.fixv && d.sev !== "SAFE").length;
   const aband = activeDeps.filter(d => d.maint === "Abandoned").length;
-  const risk = Math.min(98, Math.round((crit * 15 + activeDeps.filter(d => d.sev === "HIGH").length * 8 + activeDeps.filter(d => d.sev === "MEDIUM").length * 4) / activeDeps.length * 10));
-  const grade = risk > 70 ? "D" : risk > 50 ? "C" : risk > 30 ? "B" : "A";
-  const gc = risk > 70 ? "var(--red)" : risk > 50 ? "var(--orange)" : risk > 30 ? "var(--amber)" : "var(--teal)";
+
+  // New Scoring: 100 is perfect, subtract for vulnerabilities
+  // Every critical is -15, high is -8, med is -3, low is -1. Max penalty balanced by total deps.
+  const penalty = (crit * 20 + high * 10 + med * 4 + low * 1);
+  const risk = Math.max(0, 100 - penalty); 
+
+  const grade = risk >= 90 ? "A" : risk >= 75 ? "B" : risk >= 55 ? "C" : risk >= 35 ? "D" : "F";
+  const gc = risk >= 75 ? "var(--teal)" : risk >= 55 ? "var(--amber)" : risk >= 35 ? "var(--orange)" : "var(--red)";
 
   const rows = [...activeDeps]
     .filter(d => filt === "All" || d.sev === filt)
