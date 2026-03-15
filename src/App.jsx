@@ -324,16 +324,6 @@ function CountUp({ n, duration = 1400 }) {
   return <>{v}</>;
 }
 
-function Typewriter({ text, speed = 12 }) {
-  const [out, setOut] = useState("");
-  useEffect(() => {
-    setOut(""); if (!text) return;
-    let i = 0;
-    const iv = setInterval(() => { setOut(text.slice(0, i + 1)); i++; if (i >= text.length) clearInterval(iv); }, speed);
-    return () => clearInterval(iv);
-  }, [text, speed]);
-  return <span>{out}{out.length < text.length && <span style={{ animation: "blink 0.9s step-end infinite", color: "var(--primary)" }}>▋</span>}</span>;
-}
 
 function GaugeArc({ value, size = 100 }) {
   const r = (size - 12) / 2;
@@ -771,11 +761,6 @@ export default function App() {
   const [filt, setFilt] = useState("All");
   const [sCol, setSCol] = useState("score");
   const [sDir, setSDir] = useState("desc");
-  const [key, setKey] = useState("");
-  const [q, setQ] = useState("");
-  const [resp, setResp] = useState("");
-  const [aLoad, setALoad] = useState(false);
-  const [aErr, setAErr] = useState("");
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -786,7 +771,6 @@ export default function App() {
     { id: "graph", label: "Dependency Graph", icon: "⬡" },
     { id: "vulns", label: "Vulnerabilities", icon: "⚑" },
     { id: "fixes", label: "Fix Plan", icon: "✦" },
-    { id: "ai", label: "AI Insights", icon: "◈" },
   ];
 
   const API = "http://localhost:5000";
@@ -872,55 +856,6 @@ export default function App() {
 
   const doSort = c => { if (sCol === c) setSDir(d => d === "asc" ? "desc" : "asc"); else { setSCol(c); setSDir("desc"); } };
 
-  const localAdvisor = (query, deps) => {
-    const q = query.toLowerCase();
-    const vd = deps.filter(d => d.sev !== "SAFE");
-    if (q.includes("critical") || q.includes("most important") || q.includes("patch first")) {
-      const top = vd.sort((a, b) => b.score - a.score).slice(0, 3);
-      if (!top.length) return "Your project has no known vulnerabilities! Great job.";
-      return `### 🚨 Top Critical Risks\nBased on your scan, here are the most urgent packages to address:\n\n` + 
-        top.map(d => `- **${d.name}** (v${d.version}): Score **${d.score}** (${d.sev}). ${d.desc}`).join("\n") +
-        "\n\n**Recommendation:** Use the 'Fix Plan' tab to generate remediation commands for these packages.";
-    }
-    if (q.includes("fix") || q.includes("plan") || q.includes("how to")) {
-      const canFix = vd.filter(d => d.fix).length;
-      return `### 🛠️ Remediation Plan\nI've analyzed ${vd.length} vulnerabilities. ${canFix} of them have direct upgrade paths available.\n\n` +
-        `- **Immediate:** Upgrade the ${canFix} packages with known fixes using the 'Fix Plan' tab.\n` +
-        `- **Manual:** For packages without a direct fix, consider switching to the suggested alternatives.\n` +
-        `- **Strategy:** Always prioritize libraries with CVSS scores above 7.0 (High/Critical).`;
-    }
-    if (q.includes("explain") || q.includes("what is") || q.includes("about")) {
-      const pkg = vd.find(d => q.includes(d.name.toLowerCase()));
-      if (pkg) return `### 🔍 About ${pkg.name}\n${pkg.desc}\n\n- **Severity:** ${pkg.sev}\n- **NVD Score:** ${pkg.score}\n- **CVEs:** ${pkg.cves.join(", ") || "None"}\n- **Latest Version:** ${pkg.latest}`;
-      return "I can explain any vulnerable package in your list. Try asking 'What is lodash?' or similar.";
-    }
-    return `### ◈ DepShield Local Advisor\nI'm analyzing your ${deps.length} dependencies locally.\n\n- **Status:** ${vd.length > 0 ? "Vulnerable" : "Secure"}\n- **Risk Score:** ${risk}/100\n- **Grade:** ${grade}\n\nI recommend addressing the ${vd.filter(d => d.sev === "CRITICAL").length} Critical and ${vd.filter(d => d.sev === "HIGH").length} High severity issues first. You can ask me about specific packages or for a fix plan.`;
-  };
-
-  const ask = async q => {
-    if (!q.trim()) return;
-    setALoad(true); setResp(""); setAErr("");
-    
-    // Fallback to local advisor if no key
-    if (!key.trim()) {
-      await new Promise(r => setTimeout(r, 600)); // Simulate "thought"
-      setResp(localAdvisor(q, activeDeps));
-      setALoad(false);
-      return;
-    }
-
-    const vd = activeDeps.filter(d => d.sev !== "SAFE").map(d => ({ name: d.name, version: d.version, severity: d.sev, score: d.score, cves: d.cves }));
-    try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: `You are a senior application security expert. The developer scanned their project: ${JSON.stringify(vd)}.\n\nUser question: "${q}"\n\nGive clear, concise, actionable advice. Use bullet points where helpful.` }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 1000 } })
-      });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error.message);
-      setResp(d.candidates[0].content.parts[0].text);
-    } catch (e) { setAErr("Error: " + e.message); }
-    finally { setALoad(false); }
-  };
 
   const fixes = activeDeps.filter(d => d.sev !== "SAFE" && d.fix).sort((a, b) => b.score - a.score);
 
@@ -1321,87 +1256,6 @@ export default function App() {
               </div>
             )}
 
-            {/* ── AI INSIGHTS ── */}
-            {tab === "ai" && (
-              <div className="fade-up" style={{ maxWidth: 820 }}>
-                <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-                  <div>
-                    <h2 className="section-title">AI Security Insights</h2>
-                    <p style={{ color: "var(--text2)", fontSize: 13, marginTop: 5 }}>Expert remediation guidance for your scanned dependencies</p>
-                  </div>
-                  <span className="tag" style={{ 
-                    background: key ? "rgba(57, 62, 70, 0.1)" : "rgba(16, 185, 129, 0.1)", 
-                    color: key ? "var(--primary)" : "var(--green)", 
-                    border: `1px solid ${key ? "var(--primary)" : "var(--green)"}33`,
-                    padding: "4px 10px"
-                  }}>
-                    {key ? "✧ Advanced Mode" : "◈ Free Tier Active"}
-                  </span>
-                </div>
-
-                {/* API key */}
-                <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                    <label className="label">Gemini API Key</label>
-                    <span style={{ fontSize: 11, color: "var(--text3)" }}>Optional for basic insights</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                    <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="AIza... — paste your key" />
-                    <span style={{ color: key ? "var(--green)" : "var(--text3)", fontSize: 12, whiteSpace: "nowrap", fontWeight: 500 }}>
-                      {key ? "✓ Active" : "Local Only"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Quick prompts */}
-                <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-                  {["What's most critical?", "Explain Log4Shell", "Give me a fix plan"].map(p => (
-                    <button key={p} className="btn btn-ghost" onClick={() => { setQ(p); ask(p); }}
-                      style={{ fontSize: 12, color: "var(--primary)", borderColor: "rgba(57, 62, 70, 0.25)", background: "var(--primary-bg)" }}>
-                      ✧ {p}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Input */}
-                <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <input type="text" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && ask(q)}
-                      placeholder="Ask a security question, e.g. 'What should I patch first?'" />
-                    <button className="btn btn-cyan" onClick={() => ask(q)} disabled={aLoad} style={{ padding: "11px 20px", flexShrink: 0 }}>
-                      {aLoad ? <span className="spinner" /> : "Ask →"}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Response */}
-                {(resp || aErr || aLoad) && (
-                  <div className="card" style={{ padding: 24 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div style={{ width: 34, height: 34, background: "linear-gradient(135deg,rgba(57, 62, 70, 0.2),var(--primary-bg))", border: "1px solid rgba(57, 62, 70, 0.2)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>✦</div>
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 600 }}>AI Security Expert</div>
-                          <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 1 }}>Gemini 2.0 Flash</div>
-                        </div>
-                      </div>
-                      {resp && <button className="btn btn-ghost" onClick={() => { setResp(""); setQ(""); setAErr(""); }} style={{ fontSize: 12 }}>New question →</button>}
-                    </div>
-                    {aLoad && <div style={{ display: "flex", alignItems: "center", gap: 12, color: "var(--text2)", padding: "12px 0" }}><span className="spinner" /><span style={{ fontSize: 13 }}>Analyzing vulnerability data…</span></div>}
-                    {aErr && <div style={{ color: "var(--red)", fontSize: 13, background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: 9, padding: "13px 16px" }}>{aErr}</div>}
-                    {resp && <div style={{ color: "var(--text2)", fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap" }}><Typewriter text={resp} speed={11} /></div>}
-                  </div>
-                )}
-
-                {!resp && !aLoad && !aErr && (
-                  <div style={{ textAlign: "center", padding: "52px 0", color: "var(--text3)" }}>
-                    <div style={{ fontSize: 52, marginBottom: 16, opacity: 0.3 }}>✦</div>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>Add your API key and ask a question to get started</div>
-                    <div style={{ fontSize: 12, marginTop: 6, opacity: 0.6 }}>Free key available at aistudio.google.com</div>
-                  </div>
-                )}
-              </div>
-            )}
 
           </div>
         )}
