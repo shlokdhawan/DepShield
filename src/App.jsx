@@ -793,20 +793,48 @@ export default function App() {
     await new Promise(r => setTimeout(r, 400));
   };
 
+  const [backendStatus, setBackendStatus] = useState("checking");
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch(`${API}/api/health`, { signal: AbortController.timeout(2000).signal });
+        const data = await res.json();
+        setBackendStatus(data.status === "ok" ? "connected" : "error");
+      } catch (e) {
+        setBackendStatus("disconnected");
+      }
+    };
+    checkHealth();
+    const interval = setInterval(checkHealth, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   const startURLScan = async () => {
     if (!url.trim()) return;
     setScanError("");
-    const fetchPromise = fetch(`${API}/api/scan`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repoUrl: url }),
-    }).then(r => r.json()).catch(err => ({ error: err.message }));
+    
+    try {
+      const fetchPromise = fetch(`${API}/api/scan`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoUrl: url }),
+      });
 
-    await runPipeline(fetchPromise);
-    const result = await fetchPromise;
-
-    if (result.error) { setScanError(result.error); setPhase("input"); return; }
-    if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
-    else { setScanError("Unexpected response from server."); setPhase("input"); }
+      await runPipeline(fetchPromise.then(r => r.json()));
+      const res = await fetchPromise;
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server returned ${res.status}`);
+      }
+      const result = await res.json();
+      if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
+      else { throw new Error("Unexpected response format from server."); }
+    } catch (err) {
+      setScanError(err.message === "Failed to fetch" 
+        ? "Cannot connect to backend. Please ensure the server is running (npm run dev:all)" 
+        : err.message);
+      setPhase("input");
+    }
   };
 
   const startFileScan = async (file) => {
@@ -816,17 +844,27 @@ export default function App() {
       try { content = JSON.parse(e.target.result); } catch (_) { setScanError("Invalid JSON file"); return; }
       setScanError("");
       
-      const fetchPromise = fetch(`${API}/api/scan-file`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: file.name, content }),
-      }).then(r => r.json()).catch(err => ({ error: err.message }));
+      try {
+        const fetchPromise = fetch(`${API}/api/scan-file`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: file.name, content }),
+        });
 
-      await runPipeline(fetchPromise);
-      const result = await fetchPromise;
-
-      if (result.error) { setScanError(result.error); setPhase("input"); return; }
-      if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
-      else { setScanError("Unexpected response from server."); setPhase("input"); }
+        await runPipeline(fetchPromise.then(r => r.json()));
+        const res = await fetchPromise;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Server returned ${res.status}`);
+        }
+        const result = await res.json();
+        if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
+        else { throw new Error("Unexpected response format from server."); }
+      } catch (err) {
+        setScanError(err.message === "Failed to fetch" 
+          ? "Cannot connect to backend. Please ensure the server is running (npm run dev:all)" 
+          : err.message);
+        setPhase("input");
+      }
     };
     reader.readAsText(file);
   };

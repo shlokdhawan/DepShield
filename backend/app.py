@@ -21,9 +21,23 @@ app = Flask(__name__)
 CORS(app)
 
 
+# Check if git is available
+GIT_AVAILABLE = False
+try:
+    import subprocess
+    subprocess.check_output(["git", "--version"])
+    GIT_AVAILABLE = True
+except Exception:
+    print("[DepShield] Warning: git executable not found. GitHub URL scanning will fail.")
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "git_available": GIT_AVAILABLE,
+        "environment": "localhost"
+    })
 
 
 @app.route("/api/scan", methods=["POST"])
