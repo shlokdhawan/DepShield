@@ -11,33 +11,62 @@ import os
 import json
 import shutil
 import tempfile
+import requests
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from git import Repo
-
-from analyzer import analyze_manifest
+try:
+    from .analyzer import analyze_manifest
+except (ImportError, ValueError):
+    from analyzer import analyze_manifest
 
 app = Flask(__name__)
 CORS(app)
 
-
 # Check if git is available
 GIT_AVAILABLE = False
 try:
+    from git import Repo
     import subprocess
     subprocess.check_output(["git", "--version"])
     GIT_AVAILABLE = True
 except Exception:
-    print("[DepShield] Warning: git executable not found. GitHub URL scanning will fail.")
+    print("[DepShield] Warning: git executable not found. GitHub URL scanning will be limited.")
 
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "ok",
-        "git_available": GIT_AVAILABLE,
-        "environment": "localhost"
-    })
+    return jsonify({"status": "ok", "git": GIT_AVAILABLE})
+
+
+def fetch_github_api(repo_url):
+    """
+    Attempt to fetch package-lock.json or package.json via GitHub REST API.
+    Works for public repos without needing 'git clone'.
+    """
+    # Parse owner/repo from URL
+    # https://github.com/owner/repo -> owner/repo
+    match = re.search(r"github\.com/([^/]+)/([^/.]+)", repo_url)
+    if not match:
+        return None, None
+    
+    owner, repo = match.groups()
+    base_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main"
+    
+    for filename in ["package-lock.json", "package.json"]:
+        try:
+            r = requests.get(f"{base_url}/{filename}", timeout=10)
+            if r.status_code == 200:
+                return filename, r.json()
+        except Exception:
+            # Fallback to 'master' if 'main' fails
+            try:
+                r = requests.get(f"https://raw.githubusercontent.com/{owner}/{repo}/master/{filename}", timeout=10)
+                if r.status_code == 200:
+                    return filename, r.json()
+            except Exception:
+                continue
+    return None, None
 
 
 @app.route("/api/scan", methods=["POST"])
@@ -52,6 +81,14 @@ def scan_repo():
     if not repo_url:
         return jsonify({"error": "repoUrl is required"}), 400
 
+    if not GIT_AVAILABLE:
+        print(f"[DepShield] Git unavailable, trying GitHub API for {repo_url}...")
+        filename, content = fetch_github_api(repo_url)
+        if content:
+            deps = analyze_manifest(filename, content)
+            return jsonify(deps)
+        return jsonify({"error": "Git is not installed and GitHub API fetch failed. URL scanning is unavailable in this environment. Please use 'Upload File' instead."}), 501
+
     # Normalize GitHub URL
     if not repo_url.endswith(".git"):
         repo_url_git = repo_url.rstrip("/") + ".git"
@@ -62,6 +99,7 @@ def scan_repo():
 
     try:
         print(f"\n[DepShield] Cloning {repo_url} ...")
+        from git import Repo
         Repo.clone_from(repo_url_git, tmp_dir, depth=1)
 
         # Look for manifest
