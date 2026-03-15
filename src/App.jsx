@@ -773,7 +773,7 @@ export default function App() {
     { id: "fixes", label: "Fix Plan", icon: "✦" },
   ];
 
-  const API = "https://depshield-production.up.railway.app";
+  const API = "http://localhost:5000";
 
   const runPipeline = async (backendPromise) => {
     setPhase("pipeline"); setStep(-1); setDone([]);
