@@ -939,10 +939,6 @@ export default function App() {
           <div style={{ maxWidth: 640, margin: "0 auto", padding: "72px 24px 48px" }}>
             {/* Hero */}
             <div style={{ textAlign: "center", marginBottom: 48 }} className="fade-up">
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "var(--primary-bg)", border: "1px solid rgba(57, 62, 70, 0.2)", borderRadius: 20, padding: "6px 14px", fontSize: 12, color: "var(--primary)", marginBottom: 24, fontWeight: 500 }}>
-                <span style={{ animation: "pulse-dot 2s ease-in-out infinite", display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--primary)" }} />
-                Powered by Gemini 2.0 Flash + NVD Database
-              </div>
               <h1 style={{ fontFamily: "var(--head)", fontSize: 44, fontWeight: 800, color: "var(--text)", lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: 16 }}>
                 Dependency Risk<br /><span style={{ background: "linear-gradient(135deg,var(--primary),var(--text2))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Analyzer</span>
               </h1>
