@@ -10,34 +10,61 @@ DepShield is a personal AI-powered tool designed to analyze project dependencies
 
 ## Getting Started
 
+Follow these steps to set up and run DepShield on your local machine.
+
 ### Prerequisites
 
-- Node.js (v18 or higher)
-- npm or yarn
+- **Node.js**: v18 or higher ([Download](https://nodejs.org/))
+- **Python**: v3.8 or higher ([Download](https://www.python.org/))
+- **Git**: Installed and available in your PATH
 
 ### Installation
 
-1. Clone the repository:
+1. **Clone the repository**:
    ```bash
    git clone https://github.com/yourusername/dep-shield.git
+   cd dep-shield
    ```
-2. Install dependencies:
+
+2. **Install Frontend Dependencies**:
    ```bash
    npm install
    ```
 
-### Development
+3. **Install Backend Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-Run the development server:
+### Running the Application
+
+DepShield requires both the React frontend and the Flask backend to be running.
+
+#### 1. Start Both Simultaneously (Recommended)
+Run the following command in the root directory:
 ```bash
-npm run dev
+npm start
 ```
+This uses `concurrently` to launch the Vite development server and the Python Flask API at the same time.
 
-The app will be available at `http://localhost:5173`.
+#### 2. Manual Startup (Separate Terminals)
+If you prefer to run them separately:
+
+- **Frontend**:
+  ```bash
+  npm run dev
+  ```
+  App available at `http://localhost:5173`.
+
+- **Backend**:
+  ```bash
+  npm run backend
+  ```
+  API available at `http://localhost:5000`.
 
 ### Building for Production
 
-To create a production-ready bundle:
+To create a production-ready bundle of the frontend:
 ```bash
 npm run build
 ```
