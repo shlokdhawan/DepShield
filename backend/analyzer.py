@@ -19,8 +19,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 # ─── CONSTANTS ─────────────────────────────────────────────────────────────────
-CONCURRENCY = 10
+CONCURRENCY = 50
 ONE_YEAR_SECS = 365 * 24 * 60 * 60
+
+# Metadata caches to prevent redundant external API calls
+OSV_CACHE = {}
+NPM_CACHE = {}
 
 SEV_COLORS = {
     "CRITICAL": "var(--red)",
@@ -153,16 +157,68 @@ def query_osv(name, version):
     except Exception:
         return []
 
+def fetch_osv_batch(deps_list):
+    """Fetch OSV data for a list of packages in bulk and store in OSV_CACHE."""
+    CHUNK_SIZE = 1000
+    queries = []
+    keys = []
+    
+    for d in deps_list:
+        name = d["name"]
+        version = d["version"]
+        cache_key = f"{name}@{version}"
+        if cache_key not in OSV_CACHE:
+            queries.append({"package": {"name": name, "ecosystem": "npm"}, "version": version})
+            keys.append(cache_key)
+
+    for i in range(0, len(queries), CHUNK_SIZE):
+        chunk = queries[i:i + CHUNK_SIZE]
+        chunk_keys = keys[i:i + CHUNK_SIZE]
+        try:
+            r = requests.post("https://api.osv.dev/v1/querybatch", json={"queries": chunk}, timeout=15)
+            r.raise_for_status()
+            results = r.json().get("results", [])
+            for j, res in enumerate(results):
+                vulns = res.get("vulns", [])
+                parsed_vulns = []
+                for v in vulns:
+                    vid = v.get("id", "")
+                    cvss = 0.0
+                    for sev_entry in v.get("severity", []):
+                        if sev_entry.get("type") == "CVSS_V3":
+                            try: cvss = float(sev_entry.get("score", ""))
+                            except: pass
+                    db_sev = (v.get("database_specific", {}).get("severity", "") or "").upper()
+                    if cvss == 0.0:
+                        if db_sev == "CRITICAL": cvss = 9.0
+                        elif db_sev == "HIGH": cvss = 7.5
+                        elif db_sev in ["MODERATE", "MEDIUM"]: cvss = 5.5
+                        elif db_sev == "LOW": cvss = 3.0
+                        else: cvss = 5.0
+                    summary = v.get("summary") or v.get("details", "No details available.")
+                    if len(summary) > 200: summary = summary[:197] + "..."
+                    parsed_vulns.append({
+                        "id": vid, "cvss": cvss, "severity": db_sev or _score_to_sev(cvss),
+                        "summary": summary, "url": f"https://osv.dev/vulnerability/{vid}"
+                    })
+                OSV_CACHE[chunk_keys[j]] = parsed_vulns
+        except Exception as e:
+            print(f"[DepShield] OSV Batch query failed: {e}")
+            for k in chunk_keys:
+                OSV_CACHE[k] = []
+
 
 def query_npm_meta(name):
     """Fetch latest version, dates, license, maintainer info from npm registry."""
+    if name in NPM_CACHE:
+        return NPM_CACHE[name]
     try:
         r = requests.get(f"https://registry.npmjs.org/{name}", timeout=10)
         r.raise_for_status()
         data = r.json()
         latest = (data.get("dist-tags") or {}).get("latest")
         modified = (data.get("time") or {}).get("modified")
-        return {
+        res = {
             "latest": latest,
             "modified": modified,
             "license": data.get("license") or "Unknown",
@@ -170,6 +226,8 @@ def query_npm_meta(name):
             "homepage": data.get("homepage"),
             "maintainers": len(data.get("maintainers") or []),
         }
+        NPM_CACHE[name] = res
+        return res
     except Exception:
         return None
 
@@ -182,8 +240,10 @@ def _analyze_single(dep_info):
     version = dep_info["version"]
     depth = dep_info.get("depth", 1)
     origin = dep_info.get("origin", [name])
+    project_type = dep_info.get("project_type", "Node.js (General)")
+    usage_count = dep_info.get("usage_count", -1)
 
-    vulns = query_osv(name, version)
+    vulns = OSV_CACHE.get(f"{name}@{version}", [])
     meta = query_npm_meta(name)
 
     # ── Compute CVSS-like score (max of individual CVEs) ──
@@ -214,12 +274,55 @@ def _analyze_single(dep_info):
                 maint = "Inactive"
         except Exception:
             pass
-    elif not meta:
+    if not meta:
         maint = "Inactive"
 
+    # Transitive vs Direct weighting
+    if depth > 1:
+        score = score * 0.8
+
     # Final clamp
-    score = round(min(10.0, score), 1)
+    score = round(min(10.0, float(score)), 1)
     sev = _score_to_sev(score)
+
+    # ── Breakage Risk ──
+    breakage_risk = "LOW"
+    def get_major(v):
+        v = _clean_version(v)
+        parts = str(v).split('.')
+        return int(parts[0]) if parts[0].isdigit() else 0
+
+    current_major = get_major(version)
+    latest_major = get_major(meta["latest"]) if meta and meta.get("latest") else current_major
+    
+    if latest_major > current_major:
+        breakage_risk = "HIGH"
+    elif is_outdated:
+        breakage_risk = "MEDIUM"
+
+    # Codebase Context Recommendations
+    reco_reason = ""
+    if sev != "SAFE":
+        if breakage_risk == "HIGH":
+            reco_reason = f"Upgrading major version (v{current_major} → v{latest_major}) requires careful testing in a {project_type} environment."
+        else:
+            reco_reason = f"Minor/patch update available. Generally safe to apply in {project_type} projects."
+    else:
+        if breakage_risk == "HIGH" and is_outdated:
+            reco_reason = f"A major update (v{latest_major}) is available. Since this is a {project_type} app, check changelogs for breaking changes before upgrading."
+        elif is_outdated:
+            reco_reason = f"A minor update is available. Good practice to keep {project_type} dependencies fresh."
+        else:
+            reco_reason = f"Dependency is up to date."
+
+    # Code usage info formatting
+    usage_info = ""
+    if usage_count > 0:
+        usage_info = f"Imported in {usage_count} file(s)"
+    elif usage_count == 0:
+        usage_info = "No direct imports detected"
+    else:
+        usage_info = "Usage data unavailable"
 
     # CVE IDs list
     cve_ids = [v["id"] for v in vulns]
@@ -277,15 +380,21 @@ def _analyze_single(dep_info):
         "effort": _effort(score, depth),
         "sz": sz,
         "col": SEV_COLORS.get(sev, "var(--teal)"),
+        "breakage_risk": breakage_risk,
+        "usage_info": usage_info,
+        "reco": reco_reason,
     }
 
 
-def analyze_manifest(filename, content):
+def analyze_manifest(filename, content, usage_map=None):
     """
     Analyze a parsed package.json or package-lock.json.
     Returns list of dep objects in the exact DEPS format the frontend expects.
     """
     deps_to_scan = []
+
+    import time
+    t0 = time.time()
 
     if isinstance(content, str):
         import json
@@ -329,14 +438,38 @@ def analyze_manifest(filename, content):
     if not deps_to_scan:
         raise ValueError("No dependencies found in file")
 
-    # Deduplicate by name (keep first occurrence)
+    # Deduplicate by name+version (keep first occurrence)
     seen = set()
     unique_deps = []
     for d in deps_to_scan:
-        if d["name"] not in seen:
-            seen.add(d["name"])
+        key = f"{d['name']}@{d['version']}"
+        if key not in seen:
+            seen.add(key)
             unique_deps.append(d)
     deps_to_scan = unique_deps
+
+    # Determine Project Type
+    unique_names = [d["name"] for d in deps_to_scan]
+    project_type = "Node.js (General)"
+    if "react" in unique_names or "next" in unique_names or "vue" in unique_names or "svelte" in unique_names:
+        project_type = "Frontend (React/Vue/etc)"
+    if "express" in unique_names or "koa" in unique_names or "nestjs" in unique_names or "fastify" in unique_names:
+        if project_type.startswith("Frontend"):
+            project_type = "Fullstack (Node + Frontend)"
+        else:
+            project_type = "Backend (Express/Node)"
+
+    for d in deps_to_scan:
+        d["project_type"] = project_type
+        if usage_map is not None:
+            d["usage_count"] = usage_map.get(d["name"], 0)
+        else:
+            d["usage_count"] = -1
+
+    t1 = time.time()
+    # Pre-fetch OSV vulnerabilities in batches
+    fetch_osv_batch(deps_to_scan)
+    t2 = time.time()
 
     # Parallel analysis
     results = []
@@ -366,7 +499,19 @@ def analyze_manifest(filename, content):
                     "effort": "Easy",
                     "sz": 8,
                     "col": "var(--teal)",
+                    "breakage_risk": "LOW",
+                    "usage_info": "Analysis failed",
+                    "reco": "Error during analysis",
                 })
+
+    # Reduce payload size for huge trees
+    if len(results) > 500:
+        for r in results:
+            if r["sev"] == "SAFE" and len(r.get("origin", [])) > 2:
+                # Strip unnecessary big fields for safe transitive deps
+                r["desc"] = ""
+                r["alts"] = []
+                r["reco"] = ""
 
     # Sort: critical first, then by score descending
     sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "SAFE": 4}
@@ -375,5 +520,8 @@ def analyze_manifest(filename, content):
     # Assign sequential IDs
     for i, r in enumerate(results):
         r["id"] = i + 1
+
+    t3 = time.time()
+    print(f"[DepShield Timing] Parse/Dedupe: {t1-t0:.2f}s | OSV Batch: {t2-t1:.2f}s | Threads/NPM: {t3-t2:.2f}s | Total Analyzer: {t3-t0:.2f}s")
 
     return results

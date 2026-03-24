@@ -71,6 +71,11 @@ export default function Panel({ dep, onClose }) {
               <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/5 border border-white/10 text-ghost/70 rounded-full text-xs font-mono">
                 {dep.maint === "Active" ? "🟢" : dep.maint === "Abandoned" ? "🔴" : "🟡"} {dep.maint}
               </span>
+              {dep.breakage_risk && (
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 border rounded-full text-xs font-mono font-bold ${dep.breakage_risk === 'HIGH' ? 'bg-red-500/10 border-red-500/30 text-red-500' : dep.breakage_risk === 'MEDIUM' ? 'bg-amber-500/10 border-amber-500/30 text-amber-500' : 'bg-teal-400/10 border-teal-400/30 text-teal-400'}`}>
+                  {dep.breakage_risk === 'HIGH' ? '⚠️ High Breakage Risk' : dep.breakage_risk === 'MEDIUM' ? '⚡ Med Breakage Risk' : '✓ Low Breakage Risk'}
+                </span>
+              )}
             </div>
           </div>
           <button
@@ -153,6 +158,29 @@ export default function Panel({ dep, onClose }) {
               })}
             </div>
           </div>
+
+          {/* Codebase Context */}
+          {(dep.usage_info || dep.reco) && (
+            <div className="panel-item mb-8">
+              <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+                <Activity size={14} /> Codebase Context
+              </p>
+              <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner space-y-4">
+                {dep.usage_info && (
+                  <div>
+                    <strong className="text-white/90 block mb-1">Observed Usage:</strong>
+                    <span className="text-primary font-mono bg-primary/10 border border-primary/20 px-2 py-1 rounded text-xs">{dep.usage_info}</span>
+                  </div>
+                )}
+                {dep.reco && (
+                  <div>
+                    <strong className="text-white/90 block mb-1">Smart Advisor:</strong>
+                    <span>{dep.reco}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Fix command */}
           {dep.fix && (

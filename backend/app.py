@@ -68,6 +68,60 @@ def fetch_github_api(repo_url):
                 continue
     return None, None
 
+def scan_codebase_usage(directory):
+    """
+    Scan JS/TS files in a directory to find require() and import statements.
+    Returns a dict mapping package name to number of files it's imported in.
+    """
+    usage_counts = {}
+    import re
+    # Match: import ... from 'pkg' or import ... from "pkg"
+    import_re = re.compile(r"import\s+.*?from\s+['\"]([^'\"]+)['\"]", re.MULTILINE)
+    # Match: require('pkg') or require("pkg")
+    require_re = re.compile(r"require\(['\"]([^'\"]+)['\"]\)", re.MULTILINE)
+
+    for root, dirs, files in os.walk(directory):
+        if "node_modules" in dirs:
+            dirs.remove("node_modules")
+        if ".git" in dirs:
+            dirs.remove(".git")
+        if "dist" in dirs:
+            dirs.remove("dist")
+        if "build" in dirs:
+            dirs.remove("build")
+
+        for file in files:
+            if file.endswith((".js", ".jsx", ".ts", ".tsx")):
+                path = os.path.join(root, file)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        
+                        found_pkgs = set()
+                        for match in import_re.finditer(content):
+                            pkg = match.group(1).split('/')[0]
+                            if match.group(1).startswith('@'):
+                                parts = match.group(1).split('/')
+                                if len(parts) >= 2:
+                                    pkg = f"{parts[0]}/{parts[1]}"
+                            if not pkg.startswith('.'):
+                                found_pkgs.add(pkg)
+                                
+                        for match in require_re.finditer(content):
+                            pkg = match.group(1).split('/')[0]
+                            if match.group(1).startswith('@'):
+                                parts = match.group(1).split('/')
+                                if len(parts) >= 2:
+                                    pkg = f"{parts[0]}/{parts[1]}"
+                            if not pkg.startswith('.'):
+                                found_pkgs.add(pkg)
+                        
+                        for pkg in found_pkgs:
+                            usage_counts[pkg] = usage_counts.get(pkg, 0) + 1
+                except Exception:
+                    pass
+    return usage_counts
+
 
 @app.route("/api/scan", methods=["POST"])
 def scan_repo():
@@ -78,6 +132,9 @@ def scan_repo():
     data = request.get_json(force=True)
     repo_url = data.get("repoUrl", "").strip()
 
+    import time
+    t_start = time.time()
+
     if not repo_url:
         return jsonify({"error": "repoUrl is required"}), 400
 
@@ -85,7 +142,8 @@ def scan_repo():
         print(f"[DepShield] Git unavailable, trying GitHub API for {repo_url}...")
         filename, content = fetch_github_api(repo_url)
         if content:
-            deps = analyze_manifest(filename, content)
+            deps = analyze_manifest(filename, content, usage_map=None)
+            print(f"[DepShield Timing] Total via GitHub API: {time.time() - t_start:.2f}s")
             return jsonify(deps)
         return jsonify({"error": "Git is not installed and GitHub API fetch failed. URL scanning is unavailable in this environment. Please use 'Upload File' instead."}), 501
 
@@ -98,9 +156,12 @@ def scan_repo():
     tmp_dir = tempfile.mkdtemp(prefix="depshield_")
 
     try:
+        t1 = time.time()
         print(f"\n[DepShield] Cloning {repo_url} ...")
         from git import Repo
         Repo.clone_from(repo_url_git, tmp_dir, depth=1)
+        t_clone = time.time()
+        print(f"[DepShield Timing] Git Clone: {t_clone - t1:.2f}s")
 
         # Look for manifest
         lock_path = os.path.join(tmp_dir, "package-lock.json")
@@ -119,8 +180,13 @@ def scan_repo():
         with open(manifest_path, "r", encoding="utf-8") as f:
             content = json.load(f)
 
-        deps = analyze_manifest(filename, content)
+        usage_map = scan_codebase_usage(tmp_dir)
+        t_usage = time.time()
+        print(f"[DepShield Timing] Codebase Usage Scan: {t_usage - t_clone:.2f}s")
+
+        deps = analyze_manifest(filename, content, usage_map=usage_map)
         print(f"[DepShield] Done — {len(deps)} dependencies scanned")
+        print(f"[DepShield Timing] Total Full Scan: {time.time() - t_start:.2f}s")
 
         return jsonify(deps)
 
@@ -156,10 +222,14 @@ def scan_file():
         except json.JSONDecodeError:
             return jsonify({"error": "Invalid JSON content"}), 400
 
+    import time
+    t_start = time.time()
+
     try:
         print(f"\n[DepShield] Scanning file: {filename}")
-        deps = analyze_manifest(filename, content)
+        deps = analyze_manifest(filename, content, usage_map=None)
         print(f"[DepShield] Done — {len(deps)} dependencies scanned")
+        print(f"[DepShield Timing] Total File Scan: {time.time() - t_start:.2f}s")
         return jsonify(deps)
     except Exception as e:
         print(f"[DepShield] Error: {e}")
