@@ -138,8 +138,14 @@ export default function App() {
   const upg = activeDeps.filter(d => d.version !== d.fixv && d.sev !== "SAFE").length;
   const aband = activeDeps.filter(d => d.maint === "Abandoned").length;
 
-  const penalty = (crit * 20 + high * 10 + med * 4 + low * 1);
-  const risk = Math.max(0, 100 - penalty);
+  const total = activeDeps.length || 1;
+  const safeCount = total - crit - high - med - low;
+  // GPA-style weighted average: each dep scores based on severity
+  // SAFE=100, LOW=50, MEDIUM=15, HIGH=5, CRITICAL=0
+  const healthScore = (safeCount * 100 + low * 50 + med * 15 + high * 5 + crit * 0) / total;
+  // Absolute penalty for critical/high so dangerous repos can't hide behind many safe deps
+  const sevPenalty = Math.min(50, crit * 15 + high * 5);
+  const risk = Math.max(0, Math.min(100, Math.round(healthScore - sevPenalty)));
   const grade = risk >= 90 ? "A" : risk >= 75 ? "B" : risk >= 55 ? "C" : risk >= 35 ? "D" : "F";
   const gc = risk >= 75 ? "#2dd4bf" : risk >= 55 ? "#f59e0b" : risk >= 35 ? "#f97316" : "#ef4444";
 
