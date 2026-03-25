@@ -9,19 +9,27 @@ Endpoints:
 
 import os
 import json
-import shutil
+import shutil   
 import tempfile
 import requests
 import re
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 try:
     from .analyzer import analyze_manifest
 except (ImportError, ValueError):
     from analyzer import analyze_manifest
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="../dist", static_url_path="/")
 CORS(app)
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve(path):
+    if path != "" and os.path.exists(app.static_folder + "/" + path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, "index.html")
 
 # Check if git is available
 GIT_AVAILABLE = False

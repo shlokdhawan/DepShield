@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: dep-shield
+    env: docker
+    plan: free # Can be 'starter' or other plans
+    region: ohio # Adjust if needed
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: PYTHON_VERSION
+        value: 3.11.0

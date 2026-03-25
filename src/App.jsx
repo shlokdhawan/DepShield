@@ -62,7 +62,7 @@ export default function App() {
     { id: "fixes", label: "Fix Plan", icon: <Workflow size={14} /> },
   ];
 
-  const API = "http://localhost:5000";
+  const API = "";
 
   const runPipeline = async (backendPromise) => {
     setPhase("pipeline"); setStep(-1); setDone([]);
