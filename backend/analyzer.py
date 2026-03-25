@@ -141,7 +141,10 @@ def query_osv(name, version):
                 else:
                     cvss = 5.0
 
-            summary = v.get("summary") or v.get("details", "No details available.")
+            summary = v.get("summary") or v.get("details") or ""
+            # If empty, we'll mark it to be filled by analyze_single
+            if not summary:
+                summary = "Vulnerability detected (no description provided by database)."
             # Truncate long descriptions
             if len(summary) > 200:
                 summary = summary[:197] + "..."
@@ -195,7 +198,9 @@ def fetch_osv_batch(deps_list):
                         elif db_sev in ["MODERATE", "MEDIUM"]: cvss = 5.5
                         elif db_sev == "LOW": cvss = 3.0
                         else: cvss = 5.0
-                    summary = v.get("summary") or v.get("details", "No details available.")
+                    summary = v.get("summary") or v.get("details") or ""
+                    if not summary:
+                        summary = "Vulnerability detected (no description provided by database)."
                     if len(summary) > 200: summary = summary[:197] + "..."
                     parsed_vulns.append({
                         "id": vid, "cvss": cvss, "severity": db_sev or _score_to_sev(cvss),
@@ -328,15 +333,23 @@ def _analyze_single(dep_info):
     cve_ids = [v["id"] for v in vulns]
 
     # Description
+    meta_desc = (meta["description"] if meta else "") or ""
     if vulns:
+        # Use first vulnerability summary
         desc = vulns[0]["summary"]
+        
+        # If the summary is generic/missing, append or use package description instead
+        if "no description provided" in desc.lower() or not desc:
+            if meta_desc:
+                desc = f"Vulnerability detected. {meta_desc}"
+            else:
+                desc = "Vulnerability detected (specific details unavailable)."
+        
         if len(vulns) > 1:
             desc += f" (+{len(vulns)-1} more)"
     elif is_outdated:
-        meta_desc = (meta["description"] if meta else "") or ""
         desc = f"Outdated package. {meta_desc}"
     else:
-        meta_desc = (meta["description"] if meta else "") or ""
         desc = f"No known vulnerabilities. {meta_desc}"
 
     # Fix
