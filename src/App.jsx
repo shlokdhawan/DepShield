@@ -86,7 +86,13 @@ export default function App() {
     const fetchPromise = fetch(`${API}/api/scan`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ repoUrl: url }),
-    }).then(r => r.json()).catch(err => ({ error: err.message }));
+    }).then(async r => {
+      if (!r.ok) {
+        const errData = await r.json().catch(() => ({}));
+        throw new Error(errData.error || `Server responded with ${r.status}`);
+      }
+      return r.json();
+    }).catch(err => ({ error: err.message }));
 
     await runPipeline(fetchPromise);
     const result = await fetchPromise;
@@ -106,7 +112,13 @@ export default function App() {
       const fetchPromise = fetch(`${API}/api/scan-file`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, content }),
-      }).then(r => r.json()).catch(err => ({ error: err.message }));
+      }).then(async r => {
+        if (!r.ok) {
+          const errData = await r.json().catch(() => ({}));
+          throw new Error(errData.error || `Server responded with ${r.status}`);
+        }
+        return r.json();
+      }).catch(err => ({ error: err.message }));
 
       await runPipeline(fetchPromise);
       const result = await fetchPromise;
