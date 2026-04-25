@@ -6,7 +6,7 @@ import { DEPS, PIPE, SEV } from "./components/Data";
 import Graph from "./components/Graph";
 import Panel from "./components/Panel";
 import {
-  Shield, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
+  Shield, ShieldAlert, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
   Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download
 } from "lucide-react";
 

@@ -13,8 +13,20 @@ import shutil
 import tempfile
 import requests
 import re
+import logging
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
+
+# Load environment variables FIRST so local imports get the API keys!
+load_dotenv()
+
+try:
+    from .threat_intel import update_threat_intelligence
+except (ImportError, ValueError):
+    from threat_intel import update_threat_intelligence
+
 try:
     from .analyzer import analyze_manifest
 except (ImportError, ValueError):
@@ -59,21 +71,21 @@ def fetch_github_api(repo_url):
         return None, None
     
     owner, repo = match.groups()
-    base_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main"
     
     for filename in ["package-lock.json", "package.json"]:
         try:
-            r = requests.get(f"{base_url}/{filename}", timeout=10)
+            # Try 'main' branch
+            r = requests.get(f"https://raw.githubusercontent.com/{owner}/{repo}/main/{filename}", timeout=10)
+            if r.status_code == 200:
+                return filename, r.json()
+            
+            # If 'main' is missing, try 'master' branch
+            r = requests.get(f"https://raw.githubusercontent.com/{owner}/{repo}/master/{filename}", timeout=10)
             if r.status_code == 200:
                 return filename, r.json()
         except Exception:
-            # Fallback to 'master' if 'main' fails
-            try:
-                r = requests.get(f"https://raw.githubusercontent.com/{owner}/{repo}/master/{filename}", timeout=10)
-                if r.status_code == 200:
-                    return filename, r.json()
-            except Exception:
-                continue
+            continue
+            
     return None, None
 
 def scan_codebase_usage(directory):
@@ -166,8 +178,32 @@ def scan_repo():
     try:
         t1 = time.time()
         print(f"\n[DepShield] Cloning {repo_url} ...")
-        from git import Repo
-        Repo.clone_from(repo_url_git, tmp_dir, depth=1)
+        import subprocess
+        try:
+            subprocess.run(
+                [
+                    "git", 
+                    "-c", "http.postBuffer=524288000", 
+                    "-c", "http.version=HTTP/1.1", 
+                    "clone", 
+                    "--depth=1", 
+                    repo_url_git, 
+                    tmp_dir
+                ],
+                check=True,
+                capture_output=True
+            )
+        except subprocess.CalledProcessError as e:
+            err_msg = e.stderr.decode('utf-8') if e.stderr else str(e)
+            print(f"[DepShield] Git clone failed. Falling back to GitHub API... Error: {err_msg}")
+            filename, content = fetch_github_api(repo_url)
+            if content:
+                deps = analyze_manifest(filename, content, usage_map=None)
+                print(f"[DepShield Timing] Total via GitHub API fallback: {time.time() - t_start:.2f}s")
+                return jsonify(deps)
+            else:
+                return jsonify({"error": f"Git clone failed and GitHub API fallback also failed. Git Error: {err_msg}"}), 500
+
         t_clone = time.time()
         print(f"[DepShield Timing] Git Clone: {t_clone - t1:.2f}s")
 
@@ -245,6 +281,17 @@ def scan_file():
 
 
 if __name__ == "__main__":
+    # Start background threat intel job
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=update_threat_intelligence, trigger="interval", hours=4)
+    scheduler.start()
+    
+    # Run initial sync
+    try:
+        update_threat_intelligence()
+    except Exception as e:
+        print(f"[DepShield] Initial threat sync failed: {e}")
+
     port = int(os.environ.get("PORT", 5000))
     print(f"[DepShield] Backend running at http://localhost:{port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)

@@ -1,0 +1,134 @@
+# .github/workflows/depshield.yml
+name: DepShield dependency scan
+
+on:
+  push:
+    paths: ['package.json', 'package-lock.json']
+  pull_request:
+    paths: ['package.json', 'package-lock.json']
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run DepShield scan
+        id: scan
+        run: |
+          # Use package-lock.json if it exists, otherwise package.json
+          MANIFEST="package.json"
+          if [ -f "package-lock.json" ]; then
+            MANIFEST="package-lock.json"
+          fi
+          
+          # Replace with your actual hosted instance URL
+          curl -s -X POST https://your-depshield.onrender.com/api/scan-file \
+            -F "file=@$MANIFEST" \
+            -o scan_result.json
+
+      - name: Convert to SARIF
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+
+          try:
+              with open("scan_result.json") as f:
+                  deps = json.load(f)
+          except Exception:
+              print("No scan result found or invalid JSON")
+              sys.exit(0)
+
+          sarif = {
+            "version": "2.1.0",
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "runs": [{
+              "tool": {"driver": {"name": "DepShield", "version": "2.0", "rules": []}},
+              "results": []
+            }]
+          }
+
+          rules = {}
+          results = []
+
+          for d in deps:
+              if d.get("sev") in ("SAFE", "LOW"):
+                  continue
+              
+              rule_id = f"DEPSHIELD-{d['name'].upper()}"
+              if rule_id not in rules:
+                  rules[rule_id] = {
+                      "id": rule_id,
+                      "name": d["name"],
+                      "shortDescription": {"text": f"{d['sev']}: {d['name']}@{d['version']}"},
+                      "helpUri": d.get("nvd_url", ""),
+                      "properties": {"tags": ["security", "dependency"]}
+                  }
+              
+              results.append({
+                  "ruleId": rule_id,
+                  "level": "error" if d["sev"] == "CRITICAL" else "warning",
+                  "message": {"text": f"{d['name']}@{d['version']}: {d.get('desc','')[:200]}"},
+                  "locations": [{"physicalLocation": {"artifactLocation": {"uri": "package-lock.json"}}}]
+              })
+
+          sarif["runs"][0]["tool"]["driver"]["rules"] = list(rules.values())
+          sarif["runs"][0]["results"] = results
+
+          with open("depshield.sarif", "w") as f:
+              json.dump(sarif, f)
+          EOF
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: depshield.sarif
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('scan_result.json')) return;
+            const deps = JSON.parse(fs.readFileSync('scan_result.json'));
+            const critical = deps.filter(d => d.sev === 'CRITICAL');
+            const high = deps.filter(d => d.sev === 'HIGH');
+            
+            if (critical.length === 0 && high.length === 0) return;
+            
+            const body = [
+              '## DepShield Security Report',
+              `Found **${critical.length} critical** and **${high.length} high** severity issues.`,
+              '',
+              '| Package | Version | Score | CVEs |',
+              '|---------|---------|-------|------|',
+              ...[...critical, ...high].slice(0, 10).map(d =>
+                `| \`${d.name}\` | ${d.version} | ${d.score}/10 | ${(d.cves||[]).join(', ')} |`
+              )
+            ].join('\n');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Fail if CRITICAL vulnerabilities found
+        run: |
+          python3 -c "
+          import json, sys, os
+          if not os.path.exists('scan_result.json'): sys.exit(0)
+          deps = json.load(open('scan_result.json'))
+          crits = [d for d in deps if d.get('sev') == 'CRITICAL']
+          if crits:
+              print(f'FAIL: {len(crits)} critical vulnerabilities found')
+              sys.exit(1)
+          print('PASS: No critical vulnerabilities')
+          "

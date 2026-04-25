@@ -9,8 +9,11 @@ export default function Panel({ dep, onClose }) {
   const panelRef = useRef(null);
   const overlayRef = useRef(null);
 
+  const [showAllVulns, setShowAllVulns] = useState(false);
+
   useEffect(() => {
     if (!dep) return;
+    setShowAllVulns(false); // Reset when dep changes
     const ctx = gsap.context(() => {
       // Entrance animation
       gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power2.out" });
@@ -63,6 +66,11 @@ export default function Panel({ dep, onClose }) {
               {dep.sev === 'CRITICAL' && <AlertTriangle size={24} color={col} className="animate-pulse" />}
               {dep.name}
             </div>
+            {dep.threat_intel && (
+              <div className="mt-2 bg-red-500/20 border border-red-500/30 text-red-400 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider animate-pulse flex items-center gap-2">
+                <ShieldAlert size={14} /> Security Alert: Known Threat Detected
+              </div>
+            )}
             <div className="text-[13px] text-ghost/60 mt-1 font-mono flex items-center gap-3">
               v{dep.version} <ArrowRight size={14} className="text-ghost/40" /> <span className="text-primary font-bold">v{dep.fixv}</span>
             </div>
@@ -106,10 +114,47 @@ export default function Panel({ dep, onClose }) {
           {/* Description */}
           <div className="panel-item mb-8">
             <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
-              <Activity size={14} /> Vulnerability Details
+              <Activity size={14} /> AI Analysis
             </p>
-            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner">
-              {dep.desc}
+            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner space-y-4 break-words">
+              {showAllVulns && dep.vuln_details?.length > 1 ? (
+                <>
+                  {dep.vuln_details.map((v, i) => {
+                    const text = v.plain_desc || v.summary || "";
+                    const cleanText = text
+                      .replace(/#+\s*/g, '')
+                      .replace(/\*\*(.*?)\*\*/g, '$1')
+                      .replace(/__(.*?)__/g, '$1')
+                      .replace(/`(.*?)`/g, '$1')
+                      .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+                      .trim();
+                    return (
+                      <div key={i} className="mb-4 last:mb-0 break-words whitespace-pre-wrap">
+                        <strong className="text-primary block mb-1 text-xs font-mono">{v.id}</strong>
+                        {cleanText}
+                      </div>
+                    );
+                  })}
+                  <button 
+                    onClick={() => setShowAllVulns(false)} 
+                    className="text-primary hover:text-primary/80 font-bold text-[11px] uppercase tracking-wider block mt-4"
+                  >
+                    Show Less
+                  </button>
+                </>
+              ) : (
+                <div className="break-words whitespace-pre-wrap">
+                  {dep.plain_desc || dep.desc}
+                  {dep.vuln_details?.length > 1 && (
+                    <span 
+                      className="text-primary font-bold cursor-pointer hover:underline ml-2 whitespace-nowrap"
+                      onClick={() => setShowAllVulns(true)}
+                    >
+                      (+{dep.vuln_details.length - 1} more)
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -132,6 +177,18 @@ export default function Panel({ dep, onClose }) {
                 <span className="w-1.5 h-1.5 rounded-full bg-ghost/40" />
                 {dep.vulns} CVE{dep.vulns !== 1 ? "s" : ""} · {dep.updated}
               </div>
+              {dep.attack_type && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-[10px] text-ghost/50 uppercase font-bold tracking-tight">
+                    {dep.attack_type}
+                  </span>
+                  {dep.urgency && (
+                    <span className="px-2 py-0.5 bg-primary/10 border border-primary/20 rounded text-[10px] text-primary uppercase font-bold tracking-tight">
+                      {dep.urgency}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -159,25 +216,42 @@ export default function Panel({ dep, onClose }) {
             </div>
           </div>
 
-          {/* Codebase Context */}
-          {(dep.usage_info || dep.reco) && (
+          {/* Codebase Context & Smart Advisor */}
+          <div className="panel-item mb-8">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+              <Zap size={14} /> Smart Advisor
+            </p>
+            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner space-y-4">
+              {dep.reco ? (
+                <div className="whitespace-pre-wrap">
+                  {dep.reco}
+                </div>
+              ) : (
+                <div className="text-ghost/40 italic">No specific remediation advice available.</div>
+              )}
+              
+              {dep.usage_info && (
+                <div className="pt-3 border-t border-white/5">
+                  <strong className="text-white/90 block mb-1">Impact Analysis:</strong>
+                  <span className="text-primary font-mono bg-primary/10 border border-primary/20 px-2 py-1 rounded text-xs">{dep.usage_info}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Risk Breakdown */}
+          {dep.score_breakdown && (
             <div className="panel-item mb-8">
               <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
-                <Activity size={14} /> Codebase Context
+                <Activity size={14} /> Risk Factor Analysis
               </p>
-              <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner space-y-4">
-                {dep.usage_info && (
-                  <div>
-                    <strong className="text-white/90 block mb-1">Observed Usage:</strong>
-                    <span className="text-primary font-mono bg-primary/10 border border-primary/20 px-2 py-1 rounded text-xs">{dep.usage_info}</span>
+              <div className="bg-[#0A0A14]/40 border border-white/5 rounded-2xl p-4 space-y-2.5">
+                {Object.entries(dep.score_breakdown).map(([key, val]) => (
+                  <div key={key} className="flex justify-between items-center text-[11px] font-mono">
+                    <span className="text-ghost/40 uppercase tracking-tighter">{key.replace(/_/g, " ")}</span>
+                    <span className="text-primary font-bold">{typeof val === "number" ? (val > 1 ? `x${val.toFixed(2)}` : val.toFixed(2)) : val}</span>
                   </div>
-                )}
-                {dep.reco && (
-                  <div>
-                    <strong className="text-white/90 block mb-1">Smart Advisor:</strong>
-                    <span>{dep.reco}</span>
-                  </div>
-                )}
+                ))}
               </div>
             </div>
           )}

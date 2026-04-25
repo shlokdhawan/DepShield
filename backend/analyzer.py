@@ -15,8 +15,21 @@ import requests
 import time
 import math
 import re
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+try:
+    from .nvd_client import enrich_vulns_with_nvd
+    from .scoring import ScoringInput, compute_risk_score
+    from .rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm
+    from .summarizer import batch_summarize
+except (ImportError, ValueError):
+    from nvd_client import enrich_vulns_with_nvd
+    from scoring import ScoringInput, compute_risk_score
+    from rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm
+    from summarizer import batch_summarize
+
+logger = logging.getLogger(__name__)
 
 # ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 CONCURRENCY = 50
@@ -47,6 +60,83 @@ ALTERNATIVES = {
     "handlebars":          [{"name": "mustache", "cmd": "npm install mustache"}, {"name": "eta", "cmd": "npm install eta"}],
     "marked":              [{"name": "remark", "cmd": "npm install remark"}],
 }
+
+# ─── CVSS v3.1 VECTOR PARSER ──────────────────────────────────────────────────
+
+def parse_cvss_vector(vector_str: str) -> float:
+    """
+    Parse a CVSS score from either a plain float string ("7.5") or a full
+    CVSS v3.x vector string ("CVSS:3.1/AV:N/AC:L/...").
+    Returns the Base Score as a float, or 0.0 on parse failure.
+    """
+    if not vector_str:
+        return 0.0
+
+    # Try plain float first
+    try:
+        return float(vector_str)
+    except (ValueError, TypeError):
+        pass
+
+    # Parse CVSS v3 vector string
+    try:
+        if not vector_str.upper().startswith("CVSS:3"):
+            logger.warning(f"Unsupported CVSS vector format: {vector_str}")
+            return 0.0
+
+        parts = vector_str.split("/")
+        metrics = {}
+        for part in parts:
+            if ":" in part:
+                key, val = part.split(":", 1)
+                metrics[key.upper()] = val.upper()
+
+        # Weight tables
+        av_weights = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
+        ac_weights = {"L": 0.77, "H": 0.44}
+        pr_weights_unchanged = {"N": 0.85, "L": 0.62, "H": 0.27}
+        pr_weights_changed   = {"N": 0.85, "L": 0.68, "H": 0.50}
+        ui_weights = {"N": 0.85, "R": 0.62}
+        cia_weights = {"H": 0.56, "L": 0.22, "N": 0.0}
+
+        scope_changed = metrics.get("S") == "C"
+
+        av = av_weights.get(metrics.get("AV", "N"), 0.85)
+        ac = ac_weights.get(metrics.get("AC", "L"), 0.77)
+        pr_table = pr_weights_changed if scope_changed else pr_weights_unchanged
+        pr = pr_table.get(metrics.get("PR", "N"), 0.85)
+        ui = ui_weights.get(metrics.get("UI", "N"), 0.85)
+
+        c = cia_weights.get(metrics.get("C", "N"), 0.0)
+        i = cia_weights.get(metrics.get("I", "N"), 0.0)
+        a = cia_weights.get(metrics.get("A", "N"), 0.0)
+
+        # ISC (Impact Sub-Score)
+        isc_base = 1.0 - (1.0 - c) * (1.0 - i) * (1.0 - a)
+
+        if scope_changed:
+            isc = 7.52 * (isc_base - 0.029) - 3.25 * ((isc_base - 0.02) ** 15)
+        else:
+            isc = 6.42 * isc_base
+
+        # Exploitability
+        exploitability = 8.22 * av * ac * pr * ui
+
+        if isc <= 0:
+            return 0.0
+
+        if scope_changed:
+            base_score = min(1.08 * (isc + exploitability), 10.0)
+        else:
+            base_score = min(isc + exploitability, 10.0)
+
+        # Round up to 1 decimal place (CVSS spec: "round up")
+        return math.ceil(base_score * 10) / 10
+
+    except Exception as e:
+        logger.error(f"Failed to parse CVSS vector '{vector_str}': {e}")
+        return 0.0
+
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -119,13 +209,9 @@ def query_osv(name, version):
             for sev_entry in v.get("severity", []):
                 if sev_entry.get("type") == "CVSS_V3":
                     score_str = sev_entry.get("score", "")
-                    # CVSS vector string — extract base score
-                    # Sometimes it's just a number, sometimes a vector
-                    try:
-                        cvss = float(score_str)
-                    except (ValueError, TypeError):
-                        # Try to parse from vector
-                        pass
+                    cvss = parse_cvss_vector(score_str)
+                    if cvss > 0:
+                        break
             
             # Fallback: derive from database_specific severity
             db_sev = (v.get("database_specific", {}).get("severity", "") or "").upper()
@@ -145,9 +231,6 @@ def query_osv(name, version):
             # If empty, we'll mark it to be filled by analyze_single
             if not summary:
                 summary = "Vulnerability detected (no description provided by database)."
-            # Truncate long descriptions
-            if len(summary) > 200:
-                summary = summary[:197] + "..."
 
             results.append({
                 "id": vid,
@@ -181,6 +264,18 @@ def fetch_osv_batch(deps_list):
             r = requests.post("https://api.osv.dev/v1/querybatch", json={"queries": chunk}, timeout=15)
             r.raise_for_status()
             results = r.json().get("results", [])
+
+            # Task 3: Defensive guard against result/query count mismatch
+            if len(results) != len(chunk_keys):
+                logger.warning(
+                    f"OSV batch returned {len(results)} results for {len(chunk_keys)} queries. "
+                    f"Falling back to individual queries for this chunk."
+                )
+                for ck_idx, ck_key in enumerate(chunk_keys):
+                    ck_parts = ck_key.split("@", 1)
+                    OSV_CACHE[ck_key] = query_osv(ck_parts[0], ck_parts[1]) if len(ck_parts) == 2 else []
+                continue
+
             for j, res in enumerate(results):
                 vulns = res.get("vulns", [])
                 parsed_vulns = []
@@ -189,8 +284,9 @@ def fetch_osv_batch(deps_list):
                     cvss = 0.0
                     for sev_entry in v.get("severity", []):
                         if sev_entry.get("type") == "CVSS_V3":
-                            try: cvss = float(sev_entry.get("score", ""))
-                            except: pass
+                            cvss = parse_cvss_vector(sev_entry.get("score", ""))
+                            if cvss > 0:
+                                break
                     db_sev = (v.get("database_specific", {}).get("severity", "") or "").upper()
                     if cvss == 0.0:
                         if db_sev == "CRITICAL": cvss = 9.0
@@ -201,7 +297,6 @@ def fetch_osv_batch(deps_list):
                     summary = v.get("summary") or v.get("details") or ""
                     if not summary:
                         summary = "Vulnerability detected (no description provided by database)."
-                    if len(summary) > 200: summary = summary[:197] + "..."
                     parsed_vulns.append({
                         "id": vid, "cvss": cvss, "severity": db_sev or _score_to_sev(cvss),
                         "summary": summary, "url": f"https://osv.dev/vulnerability/{vid}"
@@ -213,6 +308,32 @@ def fetch_osv_batch(deps_list):
                 OSV_CACHE[k] = []
 
 
+def _extract_license(data):
+    """Extract license string from npm registry data, handling various formats."""
+    # Top-level "license" field — most common
+    lic = data.get("license")
+    if isinstance(lic, str) and lic:
+        return lic
+    if isinstance(lic, dict):
+        lic_type = lic.get("type", "")
+        if lic_type:
+            return lic_type
+
+    # Try extracting from the latest version's metadata
+    latest_tag = (data.get("dist-tags") or {}).get("latest", "")
+    if latest_tag:
+        version_data = data.get("versions", {}).get(latest_tag, {})
+        lic2 = version_data.get("license")
+        if isinstance(lic2, str) and lic2:
+            return lic2
+        if isinstance(lic2, dict):
+            lic_type2 = lic2.get("type", "")
+            if lic_type2:
+                return lic_type2
+
+    return "Unknown"
+
+
 def query_npm_meta(name):
     """Fetch latest version, dates, license, maintainer info from npm registry."""
     if name in NPM_CACHE:
@@ -222,15 +343,35 @@ def query_npm_meta(name):
         r.raise_for_status()
         data = r.json()
         latest = (data.get("dist-tags") or {}).get("latest")
-        modified = (data.get("time") or {}).get("modified")
+        times = data.get("time") or {}
+        modified = times.get("modified")
+        created = times.get("created")
+        
+        # Versions count for 'versions_behind'
+        versions = list(data.get("versions", {}).keys())
+        
         res = {
             "latest": latest,
             "modified": modified,
-            "license": data.get("license") or "Unknown",
+            "created": created,
+            "license": _extract_license(data),
             "description": data.get("description") or "",
             "homepage": data.get("homepage"),
-            "maintainers": len(data.get("maintainers") or []),
+            "maintainers_count": len(data.get("maintainers") or []),
+            "deprecated": data.get("versions", {}).get(latest, {}).get("deprecated"),
+            "versions": versions,
         }
+        
+        # Fetch weekly downloads from separate api.npmjs.org
+        try:
+            dr = requests.get(f"https://api.npmjs.org/downloads/point/last-week/{name}", timeout=5)
+            if dr.status_code == 200:
+                res["weekly_downloads"] = dr.json().get("downloads", 0)
+            else:
+                res["weekly_downloads"] = 0
+        except Exception:
+            res["weekly_downloads"] = 0
+
         NPM_CACHE[name] = res
         return res
     except Exception:
@@ -249,153 +390,230 @@ def _analyze_single(dep_info):
     usage_count = dep_info.get("usage_count", -1)
 
     vulns = OSV_CACHE.get(f"{name}@{version}", [])
-    meta = query_npm_meta(name)
+
+    # Task 5: Enrich CVEs with NVD data before score computation
+    vulns = enrich_vulns_with_nvd(vulns)
+
+    meta = None
+    # Smart NPM Registry Bypass: Only fetch metadata if it's a direct dependency or has vulnerabilities
+    if depth == 1 or len(vulns) > 0:
+        meta = query_npm_meta(name)
 
     # ── Compute CVSS-like score (max of individual CVEs) ──
     max_cvss = 0.0
+    best_vector = ""
     if vulns:
         max_cvss = max(v["cvss"] for v in vulns)
+        # Find the vector for the highest scoring vuln
+        for v in vulns:
+            if v["cvss"] == max_cvss:
+                best_vector = v.get("cvssVector", "")
+                break
+                
+    # ── RAG Threat Intelligence Pass ──
+    threat_intel_payload = None
+    # Only evaluate threats for direct dependencies or highly used ones to save Groq API calls/time
+    if depth == 1 or usage_count > 0:
+        threat_records = query_threats(name)
+        if threat_records:
+            eval_result = evaluate_threat_with_llm(name, threat_records)
+            if eval_result.get("is_threat"):
+                max_cvss = max(max_cvss, 8.0)
+                threat_intel_payload = {
+                    "reason": eval_result.get("reason"),
+                    "records": threat_records
+                }
+    
+    # Default vector if missing
+    if not best_vector:
+        if max_cvss >= 9: best_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        elif max_cvss >= 7: best_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+        else: best_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N"
 
-    # Adjust score based on other factors
-    score = max_cvss
+    # Calculate health factors
+    days_since_modified = 0
+    days_since_created = 0
+    if meta and meta.get("modified"):
+        mod_dt = datetime.fromisoformat(meta["modified"].replace("Z", "+00:00"))
+        days_since_modified = (datetime.now(timezone.utc) - mod_dt).days
+    if meta and meta.get("created"):
+        cre_dt = datetime.fromisoformat(meta["created"].replace("Z", "+00:00"))
+        days_since_created = (datetime.now(timezone.utc) - cre_dt).days
 
-    # Bump for outdated
-    is_outdated = False
-    if meta and meta["latest"] and meta["latest"] != version:
-        is_outdated = True
-        if score < 2:
-            score = max(score, 1.0)  # At minimum flag it
-
-    # Determine maintainer status
-    maint = "Active"
-    if meta and meta["modified"]:
-        try:
-            mod_dt = datetime.fromisoformat(meta["modified"].replace("Z", "+00:00"))
-            age_secs = (datetime.now(timezone.utc) - mod_dt).total_seconds()
-            if age_secs > ONE_YEAR_SECS * 3:
-                maint = "Abandoned"
-                score = max(score, 2.5)
-            elif age_secs > ONE_YEAR_SECS:
-                maint = "Inactive"
-        except Exception:
-            pass
-    if not meta:
-        maint = "Inactive"
-
-    # Transitive vs Direct weighting
-    if depth > 1:
-        score = score * 0.8
-
-    # Final clamp
-    score = round(min(10.0, float(score)), 1)
-    sev = _score_to_sev(score)
-
-    # ── Breakage Risk ──
-    breakage_risk = "LOW"
+    # Breakage Risk & Versions Behind
     def get_major(v):
         v = _clean_version(v)
         parts = str(v).split('.')
         return int(parts[0]) if parts[0].isdigit() else 0
 
     current_major = get_major(version)
-    latest_major = get_major(meta["latest"]) if meta and meta.get("latest") else current_major
+    latest_ver = meta["latest"] if meta and meta.get("latest") else version
+    latest_major = get_major(latest_ver)
+    is_major_behind = latest_major > current_major
     
-    if latest_major > current_major:
-        breakage_risk = "HIGH"
-    elif is_outdated:
-        breakage_risk = "MEDIUM"
-
-    # Codebase Context Recommendations
-    reco_reason = ""
-    if sev != "SAFE":
-        if breakage_risk == "HIGH":
-            reco_reason = f"Upgrading major version (v{current_major} → v{latest_major}) requires careful testing in a {project_type} environment."
-        else:
-            reco_reason = f"Minor/patch update available. Generally safe to apply in {project_type} projects."
-    else:
-        if breakage_risk == "HIGH" and is_outdated:
-            reco_reason = f"A major update (v{latest_major}) is available. Since this is a {project_type} app, check changelogs for breaking changes before upgrading."
-        elif is_outdated:
-            reco_reason = f"A minor update is available. Good practice to keep {project_type} dependencies fresh."
-        else:
-            reco_reason = f"Dependency is up to date."
-
-    # Code usage info formatting
-    usage_info = ""
-    if usage_count > 0:
-        usage_info = f"Imported in {usage_count} file(s)"
-    elif usage_count == 0:
-        usage_info = "No direct imports detected"
-    else:
-        usage_info = "Usage data unavailable"
-
-    # CVE IDs list
-    cve_ids = [v["id"] for v in vulns]
-
-    # Description
-    meta_desc = (meta["description"] if meta else "") or ""
-    if vulns:
-        # Use first vulnerability summary
-        desc = vulns[0]["summary"]
-        
-        # If the summary is generic/missing, append or use package description instead
-        if "no description provided" in desc.lower() or not desc:
-            if meta_desc:
-                desc = f"Vulnerability detected. {meta_desc}"
+    versions_behind = 0
+    if meta and meta.get("versions"):
+        try:
+            # Simple count of versions released after the current one
+            if version in meta["versions"]:
+                idx = meta["versions"].index(version)
+                versions_behind = len(meta["versions"]) - 1 - idx
             else:
-                desc = "Vulnerability detected (specific details unavailable)."
-        
-        if len(vulns) > 1:
-            desc += f" (+{len(vulns)-1} more)"
-    elif is_outdated:
-        desc = f"Outdated package. {meta_desc}"
+                versions_behind = 1 if latest_ver != version else 0
+        except Exception:
+            versions_behind = 0
+
+    # ── NEW SCORING ENGINE ──
+    scoring_input = ScoringInput(
+        cvss_base=max_cvss,
+        cvss_vector=best_vector,
+        exploit_maturity="NOT_DEFINED", # Future: extract from NVD/Advisories
+        is_reachable=(usage_count > 0),
+        is_direct=(depth == 1),
+        depth=depth - 1,
+        days_since_modified=days_since_modified,
+        days_since_created=days_since_created,
+        maintainer_count=meta.get("maintainers_count", 1) if meta else 1,
+        weekly_downloads=meta.get("weekly_downloads", 0) if meta else 0,
+        versions_behind=versions_behind,
+        is_major_behind=is_major_behind,
+        has_deprecation_notice=bool(meta.get("deprecated")) if meta else False,
+        fix_available=(latest_ver != version),
+        fix_breaks_api=is_major_behind,
+    )
+    score, sev, score_breakdown = compute_risk_score(scoring_input)
+
+    # Wrap up AI-powered summarization for vulnerabilities
+    if vulns:
+        vulns = batch_summarize(vulns, name)
+
+    # ── Description & RAG Remediation ──
+    def clean_markdown(text):
+        text = re.sub(r'#+\s*', '', text)
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = re.sub(r'__(.*?)__', r'\1', text)
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+        return text.strip()
+
+    cve_ids = [v["id"] for v in vulns]
+    meta_desc = (meta["description"] if meta else "") or ""
+    pkg_desc = ""
+    plain_desc = ""
+    if vulns:
+        pkg_desc = clean_markdown(vulns[0]["summary"])
+        plain_desc = vulns[0].get("plain_desc")
+        if "no description provided" in pkg_desc.lower() or not pkg_desc:
+            pkg_desc = f"Vulnerability detected in {name}. {meta_desc}"
+    elif latest_ver != version:
+        pkg_desc = f"Outdated package. {meta_desc}"
     else:
-        desc = f"No known vulnerabilities. {meta_desc}"
+        pkg_desc = f"No known vulnerabilities. {meta_desc}"
 
-    # Fix
-    latest = (meta["latest"] if meta else None) or version
-    fix_cmd = ""
-    fixv = latest
-    if sev != "SAFE" and is_outdated:
-        fix_cmd = f"npm install {name}@{latest}"
-    elif sev != "SAFE" and vulns:
-        fix_cmd = f"npm install {name}@{latest}"
+    # Generate AI Remediation for HIGH/CRITICAL
+    reco_reason = ""
+    if sev in ("CRITICAL", "HIGH") and vulns:
+        # Async-like behavior: Upsert to Pinecone
+        for vuln in vulns:
+            try:
+                upsert_cve(vuln["id"], vuln.get("summary",""), vuln.get("cwes",[]), vuln["cvss"], name)
+            except Exception: pass
+            
+        try:
+            similar = query_similar_cves(pkg_desc, name)
+            reco_reason = generate_remediation(name, version, cve_ids, pkg_desc, score, similar, score_breakdown)
+        except Exception as e:
+            reco_reason = f"AI Remediation failed: {str(e)}"
+    else:
+        # Fallback to template
+        if sev != "SAFE":
+            if is_major_behind:
+                reco_reason = f"Upgrading major version (v{current_major} → v{latest_major}) requires careful testing. A fix command is provided below."
+            else:
+                reco_reason = f"Minor/patch update available. Generally safe to apply in most projects."
+        else:
+            if is_major_behind:
+                reco_reason = f"A major update (v{latest_major}) is available. Check for breaking changes before upgrading."
+            elif latest_ver != version:
+                reco_reason = f"A minor update is available. Good practice to keep dependencies fresh."
+            else:
+                reco_reason = f"Dependency is up to date."
 
-    # Alternatives
-    alts = ALTERNATIVES.get(name, [])
+    # ── Final Mapping ──
+    maint = "Active"
+    if days_since_modified > 730: maint = "Abandoned"
+    elif days_since_modified > 365: maint = "Inactive"
+
+    # Breakage risk for UI
+    breakage_risk = "LOW"
+    if is_major_behind: breakage_risk = "HIGH"
+    elif latest_ver != version: breakage_risk = "MEDIUM"
+
+    # Usage info
+    usage_info = "Usage data unavailable"
+    if usage_count > 0: usage_info = f"Imported in {usage_count} file(s)"
+    elif usage_count == 0: usage_info = "No direct imports detected"
+
+    # NVD details
+    all_cwes = []
+    all_references = []
+    nvd_url = ""
+    published = ""
+    for v in vulns:
+        if v.get("cwes"): all_cwes.extend(v["cwes"])
+        if v.get("references"): all_references.extend(v["references"])
+        if not nvd_url and v.get("id", "").startswith("CVE-"):
+            nvd_url = f"https://nvd.nist.gov/vuln/detail/{v['id']}"
+        if v.get("publishedDate"):
+            if not published or v["publishedDate"] < published:
+                published = v["publishedDate"]
+
+    all_cwes = list(dict.fromkeys(all_cwes))
+    all_references = list(dict.fromkeys(all_references))[:3]
 
     # Updated date
     updated = ""
-    if meta and meta["modified"]:
-        try:
-            updated = meta["modified"][:10]
-        except Exception:
-            updated = _time_ago(meta["modified"])
-    
-    # Size for graph node (rough heuristic)
+    if meta and meta.get("modified"):
+        updated = meta["modified"][:10]
+
+    # Size for graph
     sz = max(6, min(32, 8 + len(name)))
 
+    # Fix command
+    fix_cmd = ""
+    if sev != "SAFE" and latest_ver != version:
+        fix_cmd = f"npm install {name}@{latest_ver}"
+
     return {
+        "id": 0, # assigned by caller
         "name": name,
         "version": version,
-        "latest": latest,
+        "latest": latest_ver,
         "sev": sev,
         "score": score,
+        "score_breakdown": score_breakdown,
         "cves": cve_ids,
         "vulns": len(vulns),
-        "desc": desc,
+        "desc": pkg_desc,
+        "plain_desc": plain_desc,
         "updated": updated,
         "maint": maint,
         "origin": origin,
         "fix": fix_cmd,
-        "fixv": fixv,
-        "alts": alts,
+        "fixv": latest_ver,
+        "alts": ALTERNATIVES.get(name, []),
         "effort": _effort(score, depth),
         "sz": sz,
         "col": SEV_COLORS.get(sev, "var(--teal)"),
         "breakage_risk": breakage_risk,
         "usage_info": usage_info,
         "reco": reco_reason,
+        "cwes": all_cwes,
+        "nvd_url": nvd_url,
+        "published": published,
+        "references": all_references,
+        "threat_intel": threat_intel_payload,
+        "vuln_details": vulns if vulns else []   # Pass enriched vulns (with plain_desc)
     }
 
 

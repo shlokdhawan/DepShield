@@ -1,4 +1,12 @@
 flask==3.1.0
 flask-cors==5.0.1
-requests==2.32.3
+requests>=2.31.0
 gitpython==3.1.44
+pinecone-client
+openai
+anthropic
+python-dotenv
+huggingface_hub>=0.23.0
+apscheduler>=3.11.0
+feedparser
+groq
