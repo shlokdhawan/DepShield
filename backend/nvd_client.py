@@ -47,6 +47,7 @@ _gh_rate_limit = 10 if get_gh_token() else 5
 _gh_semaphore = threading.Semaphore(_gh_rate_limit)
 _gh_last_request = 0.0
 _gh_time_lock = threading.Lock()
+_gh_rate_limited = False # Flag to stop trying if we hit 403
 
 
 def _nvd_rate_wait():
@@ -86,13 +87,11 @@ def _gh_rate_wait():
 def query_ghsa(ghsa_id: str) -> dict:
     """
     Query the GitHub Advisory Database API for a GHSA advisory.
-    GET https://api.github.com/advisories/{ghsa_id}
-
-    Returns a structured dict with:
-      cvssScore, cvssVector, severity, description, cwes,
-      references, publishedDate, cveId
-    Returns empty dict on failure.
     """
+    global _gh_rate_limited
+    if _gh_rate_limited:
+        return {}
+
     with _cache_lock:
         if ghsa_id in ENRICHMENT_CACHE:
             return ENRICHMENT_CACHE[ghsa_id]
@@ -113,6 +112,10 @@ def query_ghsa(ghsa_id: str) -> dict:
             headers=headers,
             timeout=10,
         )
+        if r.status_code == 403:
+             _gh_rate_limited = True
+             return {}
+             
         r.raise_for_status()
         data = r.json()
 

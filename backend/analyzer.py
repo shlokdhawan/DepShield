@@ -21,13 +21,11 @@ from datetime import datetime, timezone
 try:
     from .nvd_client import enrich_vulns_with_nvd
     from .scoring import ScoringInput, compute_risk_score
-    from .rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm
-    from .summarizer import batch_summarize
+    from .rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm, generate_ai_analysis
 except (ImportError, ValueError):
     from nvd_client import enrich_vulns_with_nvd
     from scoring import ScoringInput, compute_risk_score
     from rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm, generate_ai_analysis
-    from summarizer import batch_summarize
 
 logger = logging.getLogger(__name__)
 
@@ -204,11 +202,11 @@ def query_osv(name, version):
         results = []
         for v in vulns:
             vid = v.get("id", "")
-            # Try to extract CVSS score from severity
-            cvss = 0.0
+            cvss_vector = ""
             for sev_entry in v.get("severity", []):
                 if sev_entry.get("type") == "CVSS_V3":
                     score_str = sev_entry.get("score", "")
+                    cvss_vector = score_str
                     cvss = parse_cvss_vector(score_str)
                     if cvss > 0:
                         break
@@ -235,6 +233,7 @@ def query_osv(name, version):
             results.append({
                 "id": vid,
                 "cvss": cvss,
+                "cvssVector": cvss_vector,
                 "severity": db_sev or _score_to_sev(cvss),
                 "summary": summary,
                 "url": f"https://osv.dev/vulnerability/{vid}",
@@ -244,68 +243,30 @@ def query_osv(name, version):
         return []
 
 def fetch_osv_batch(deps_list):
-    """Fetch OSV data for a list of packages in bulk and store in OSV_CACHE."""
-    CHUNK_SIZE = 1000
-    queries = []
-    keys = []
-    
+    """Fetch OSV data for a list of packages in parallel and store in OSV_CACHE."""
+    unique_queries = []
     for d in deps_list:
-        name = d["name"]
-        version = d["version"]
-        cache_key = f"{name}@{version}"
+        cache_key = f"{d['name']}@{d['version']}"
         if cache_key not in OSV_CACHE:
-            queries.append({"package": {"name": name, "ecosystem": "npm"}, "version": version})
-            keys.append(cache_key)
+            unique_queries.append((d['name'], d['version']))
+    
+    if not unique_queries:
+        return
 
-    for i in range(0, len(queries), CHUNK_SIZE):
-        chunk = queries[i:i + CHUNK_SIZE]
-        chunk_keys = keys[i:i + CHUNK_SIZE]
-        try:
-            r = requests.post("https://api.osv.dev/v1/querybatch", json={"queries": chunk}, timeout=15)
-            r.raise_for_status()
-            results = r.json().get("results", [])
-
-            # Task 3: Defensive guard against result/query count mismatch
-            if len(results) != len(chunk_keys):
-                logger.warning(
-                    f"OSV batch returned {len(results)} results for {len(chunk_keys)} queries. "
-                    f"Falling back to individual queries for this chunk."
-                )
-                for ck_idx, ck_key in enumerate(chunk_keys):
-                    ck_parts = ck_key.split("@", 1)
-                    OSV_CACHE[ck_key] = query_osv(ck_parts[0], ck_parts[1]) if len(ck_parts) == 2 else []
-                continue
-
-            for j, res in enumerate(results):
-                vulns = res.get("vulns", [])
-                parsed_vulns = []
-                for v in vulns:
-                    vid = v.get("id", "")
-                    cvss = 0.0
-                    for sev_entry in v.get("severity", []):
-                        if sev_entry.get("type") == "CVSS_V3":
-                            cvss = parse_cvss_vector(sev_entry.get("score", ""))
-                            if cvss > 0:
-                                break
-                    db_sev = (v.get("database_specific", {}).get("severity", "") or "").upper()
-                    if cvss == 0.0:
-                        if db_sev == "CRITICAL": cvss = 9.0
-                        elif db_sev == "HIGH": cvss = 7.5
-                        elif db_sev in ["MODERATE", "MEDIUM"]: cvss = 5.5
-                        elif db_sev == "LOW": cvss = 3.0
-                        else: cvss = 5.0
-                    summary = v.get("summary") or v.get("details") or ""
-                    if not summary:
-                        summary = "Vulnerability detected (no description provided by database)."
-                    parsed_vulns.append({
-                        "id": vid, "cvss": cvss, "severity": db_sev or _score_to_sev(cvss),
-                        "summary": summary, "url": f"https://osv.dev/vulnerability/{vid}"
-                    })
-                OSV_CACHE[chunk_keys[j]] = parsed_vulns
-        except Exception as e:
-            print(f"[DepShield] OSV Batch query failed: {e}")
-            for k in chunk_keys:
-                OSV_CACHE[k] = []
+    # Use a thread pool to fetch full vulnerability details in parallel.
+    # OSV individual queries return full metadata; querybatch does not.
+    with ThreadPoolExecutor(max_workers=40) as executor:
+        future_to_key = {
+            executor.submit(query_osv, name, ver): f"{name}@{ver}"
+            for name, ver in unique_queries
+        }
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                OSV_CACHE[key] = future.result()
+            except Exception as e:
+                logger.error(f"Failed to fetch OSV for {key}: {e}")
+                OSV_CACHE[key] = []
 
 
 def _extract_license(data):
@@ -390,10 +351,7 @@ def _analyze_single(dep_info):
     usage_count = dep_info.get("usage_count", -1)
 
     vulns = OSV_CACHE.get(f"{name}@{version}", [])
-
-    # Task 5: Enrich CVEs with NVD data before score computation
-    vulns = enrich_vulns_with_nvd(vulns)
-
+    
     meta = None
     # Smart NPM Registry Bypass: Only fetch metadata if it's a direct dependency or has vulnerabilities
     if depth == 1 or len(vulns) > 0:
@@ -410,12 +368,12 @@ def _analyze_single(dep_info):
                 best_vector = v.get("cvssVector", "")
                 break
                 
-    # ── RAG Threat Intelligence Pass ──
+    # RAG Threat Intelligence Pass
     threat_intel_payload = None
     threat_intel_score = 0.0
     
-    # Only evaluate threats for direct dependencies or highly used ones to save Groq API calls/time
-    if depth == 1 or usage_count > 0:
+    # Evaluate threats ONLY for vulnerable packages to save time
+    if vulns:
         threat_records = query_threats(name)
         if threat_records:
             eval_result = evaluate_threat_with_llm(name, threat_records)
@@ -486,10 +444,6 @@ def _analyze_single(dep_info):
     )
     score, sev, score_breakdown = compute_risk_score(scoring_input)
 
-    # Wrap up AI-powered summarization for vulnerabilities
-    if vulns:
-        vulns = batch_summarize(vulns, name)
-
     # ── Description & RAG Remediation ──
     def clean_markdown(text):
         text = re.sub(r'#+\s*', '', text)
@@ -507,14 +461,12 @@ def _analyze_single(dep_info):
     if vulns:
         v0 = vulns[0]
         pkg_desc = clean_markdown(v0["summary"])
-        # Prefer Groq-based analysis for direct dependencies, fallback to BART
-        if (depth == 1 or usage_count > 0) and not v0.get("plain_desc"):
+        
+        # Use Groq for AI Analysis ONLY for CRITICAL and HIGH to save time and API rate limits
+        if sev in ("CRITICAL", "HIGH") and v0.get("summary"):
              plain_desc = generate_ai_analysis(name, v0["id"], v0["summary"])
         else:
-             plain_desc = v0.get("plain_desc")
-             
-        if not plain_desc:
-            plain_desc = pkg_desc
+             plain_desc = pkg_desc
 
         if "no description provided" in pkg_desc.lower() or not pkg_desc:
             pkg_desc = f"Vulnerability detected in {name}. {meta_desc}"
@@ -523,9 +475,9 @@ def _analyze_single(dep_info):
     else:
         pkg_desc = f"No known vulnerabilities. {meta_desc}"
 
-    # Generate AI Remediation for important packages only (Direct or High/Critical)
+    # Generate AI Remediation for important packages only to save time
     reco_reason = ""
-    if sev != "SAFE" and (depth == 1 or sev in ("CRITICAL", "HIGH")):
+    if sev in ("CRITICAL", "HIGH"):
         # Async-like behavior: Upsert to Pinecone for future RAG
         for vuln in vulns:
             try:
@@ -713,6 +665,17 @@ def analyze_manifest(filename, content, usage_map=None):
     t1 = time.time()
     # Pre-fetch OSV vulnerabilities in batches
     fetch_osv_batch(deps_to_scan)
+    
+    # ── BATCH ENRICHMENT (CVE/GHSA) ──
+    # Instead of enriching each dependency individually (which creates nested thread pools),
+    # we collect all vulnerabilities found and enrich them in one parallel pass.
+    all_discovered_vulns = []
+    for cache_key in OSV_CACHE:
+        all_discovered_vulns.extend(OSV_CACHE[cache_key])
+    
+    if all_discovered_vulns:
+        enrich_vulns_with_nvd(all_discovered_vulns)
+        
     t2 = time.time()
 
     # Parallel analysis

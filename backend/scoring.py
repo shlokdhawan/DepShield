@@ -77,22 +77,13 @@ def compute_risk_score(inp: ScoringInput) -> tuple[float, str, dict]:
     breakdown["exploit_multiplier"] = exploit_multiplier
 
     # ── 3. Reachability (weight: 15%) ───────────────────────────────────────
-    # Snyk's biggest differentiator: if the vulnerable function is actually
-    # called in your code, score stays; if unreachable, score drops 30%.
-    reachability_multiplier = 1.0 if inp.is_reachable else 0.70
+    # Disabled to match previous strict scoring
+    reachability_multiplier = 1.0
     breakdown["reachability_multiplier"] = reachability_multiplier
 
     # ── 4. Dependency depth (weight: 10%) ───────────────────────────────────
-    # Dependabot distinguishes direct vs transitive.
-    # Transitive = harder to fix, but also often less directly exploitable.
-    if inp.is_direct:
-        depth_multiplier = 1.0
-    elif inp.depth == 1:
-        depth_multiplier = 0.90
-    elif inp.depth == 2:
-        depth_multiplier = 0.82
-    else:
-        depth_multiplier = 0.75  # deep transitive
+    # Disabled to match previous strict scoring
+    depth_multiplier = 1.0
     breakdown["depth_multiplier"] = depth_multiplier
 
     # ── 5. Package health penalty (weight: 10%) ─────────────────────────────
@@ -131,7 +122,7 @@ def compute_risk_score(inp: ScoringInput) -> tuple[float, str, dict]:
         * depth_multiplier
         + health_penalty
         + fix_penalty
-        + (inp.threat_intel_score * 0.2) # 20% weight for active threat intel
+        + (inp.threat_intel_score * 0.4) # 40% weight boost for active threat intel
     )
     score = round(min(max(raw, 0.0), 10.0), 1)
 

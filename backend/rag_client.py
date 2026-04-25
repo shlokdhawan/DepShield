@@ -6,11 +6,29 @@ import requests
 from pinecone import Pinecone
 from groq import Groq
 
-# Cache for threat evaluations during a single scan session
-THREAT_EVAL_CACHE = {}
-REMEDIATION_CACHE = {}
-AI_ANALYSIS_CACHE = {}
-EMBED_CACHE = {}
+# Cache files for persistence
+CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def load_cache(name):
+    path = os.path.join(CACHE_DIR, f"{name}.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f: return json.load(f)
+        except: return {}
+    return {}
+
+def save_cache(name, data):
+    path = os.path.join(CACHE_DIR, f"{name}.json")
+    try:
+        with open(path, "w") as f: json.dump(data, f)
+    except: pass
+
+# Caches
+THREAT_EVAL_CACHE = load_cache("threat_eval")
+REMEDIATION_CACHE = load_cache("remediation")
+AI_ANALYSIS_CACHE = load_cache("ai_analysis")
+EMBED_CACHE = load_cache("embed")
 
 def get_hf_token():
     return os.environ.get("HF_TOKEN", "")
@@ -152,15 +170,18 @@ Keep it under 120 words. Be concrete, not generic."""
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant", # Faster, lower token usage
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300,
             temperature=0.2,
         )
         res = completion.choices[0].message.content
         REMEDIATION_CACHE[cache_key] = res
+        save_cache("remediation", REMEDIATION_CACHE)
         return res
     except Exception as e:
+        if "429" in str(e):
+             return "AI Advisor is busy (Rate Limit). This result will be cached once Groq resets."
         return f"AI Advisor failed: {str(e)}"
 
 def upsert_threat(package: str, source: str, title: str, description: str, text: str, cves: list):
@@ -250,18 +271,18 @@ Provide your answer in strict JSON format:
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
             max_tokens=200,
-            temperature=0.1,
+            response_format={"type": "json_object"}
         )
-        content = completion.choices[0].message.content
-        res = json.loads(content)
-        THREAT_EVAL_CACHE[package] = res
-        return res
+        res_text = completion.choices[0].message.content
+        result = json.loads(res_text)
+        THREAT_EVAL_CACHE[package] = result
+        save_cache("threat_eval", THREAT_EVAL_CACHE)
+        return result
     except Exception as e:
-        return {"is_threat": False, "reason": f"Failed to evaluate threat: {str(e)}"}
+        return {"is_threat": False, "reason": f"Evaluation error: {str(e)}"}
 def generate_ai_analysis(package: str, cve_id: str, description: str) -> str:
     """
     Uses Groq to generate a plain-English security analysis.
@@ -286,13 +307,16 @@ Keep it under 60 words. No jargon."""
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant", # Use 8b for summaries to save 70b tokens
             messages=[{"role": "user", "content": prompt}],
             max_tokens=150,
-            temperature=0.2,
+            temperature=0.1,
         )
-        res = completion.choices[0].message.content
+        res = completion.choices[0].message.content.strip()
         AI_ANALYSIS_CACHE[cve_id] = res
+        save_cache("ai_analysis", AI_ANALYSIS_CACHE)
         return res
-    except Exception:
-        return ""
+    except Exception as e:
+        if "429" in str(e):
+             return "AI analysis is temporarily unavailable due to Groq rate limits."
+        return f"AI Analysis failed: {str(e)}"
