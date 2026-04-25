@@ -459,14 +459,23 @@ def _analyze_single(dep_info):
     plain_desc = ""
     
     if vulns:
+        # Generate detailed AI Analysis for EACH vulnerability (with caching)
+        for v in vulns:
+            v_id = v.get("id", "")
+            v_summary = v.get("summary", "")
+            v_sev = v.get("severity", "").upper()
+            
+            # Use Groq for AI Analysis for important ones
+            if v_sev in ("CRITICAL", "HIGH") and v_summary:
+                # generate_ai_analysis now uses persistent cache + 8b model
+                v["plain_desc"] = generate_ai_analysis(name, v_id, v_summary)
+            else:
+                v["plain_desc"] = v_summary
+
+        # Primary package description remains the first one
         v0 = vulns[0]
         pkg_desc = clean_markdown(v0["summary"])
-        
-        # Use Groq for AI Analysis ONLY for CRITICAL and HIGH to save time and API rate limits
-        if sev in ("CRITICAL", "HIGH") and v0.get("summary"):
-             plain_desc = generate_ai_analysis(name, v0["id"], v0["summary"])
-        else:
-             plain_desc = pkg_desc
+        plain_desc = v0.get("plain_desc", pkg_desc)
 
         if "no description provided" in pkg_desc.lower() or not pkg_desc:
             pkg_desc = f"Vulnerability detected in {name}. {meta_desc}"
