@@ -8,6 +8,9 @@ from groq import Groq
 
 # Cache for threat evaluations during a single scan session
 THREAT_EVAL_CACHE = {}
+REMEDIATION_CACHE = {}
+AI_ANALYSIS_CACHE = {}
+EMBED_CACHE = {}
 
 def get_hf_token():
     return os.environ.get("HF_TOKEN", "")
@@ -35,6 +38,10 @@ def embed(text: str) -> list[float]:
     Generate 384-dimension embeddings via Hugging Face Inference API.
     Model: sentence-transformers/all-MiniLM-L6-v2 (Free)
     """
+    cache_key = hashlib.md5(text.encode()).hexdigest()
+    if cache_key in EMBED_CACHE:
+        return EMBED_CACHE[cache_key]
+
     token = get_hf_token()
     if not token:
         return []
@@ -49,8 +56,9 @@ def embed(text: str) -> list[float]:
                 import time; time.sleep(15); continue
             r.raise_for_status()
             data = r.json()
-            # The model usually returns a single list for a single string input
-            return data if isinstance(data[0], float) else data[0]
+            res = data if isinstance(data[0], float) else data[0]
+            EMBED_CACHE[cache_key] = res
+            return res
         except Exception:
             continue
     return []
@@ -109,11 +117,15 @@ def generate_remediation(
     """
     Uses Groq (Llama 3.1) for fast, free remediation advice.
     """
+    cache_key = f"{package}@{version}-{'-'.join(cve_ids)}"
+    if cache_key in REMEDIATION_CACHE:
+        return REMEDIATION_CACHE[cache_key]
+
     key = get_groq_key()
     if not key:
         return "Remediation advice unavailable (GROQ_API_KEY missing)."
 
-    client = Groq(api_key=key)
+    client = Groq(api_key=key, timeout=10.0)
     
     similar_text = "\n".join([
         f"- {c.get('cve_id')} ({c.get('package')}, CVSS {c.get('cvss_score')}): {c.get('description')[:200]}"
@@ -145,9 +157,11 @@ Keep it under 120 words. Be concrete, not generic."""
             max_tokens=300,
             temperature=0.2,
         )
-        return completion.choices[0].message.content
+        res = completion.choices[0].message.content
+        REMEDIATION_CACHE[cache_key] = res
+        return res
     except Exception as e:
-        return f"Groq Remediation failed: {str(e)}"
+        return f"AI Advisor failed: {str(e)}"
 
 def upsert_threat(package: str, source: str, title: str, description: str, text: str, cves: list):
     """
@@ -213,7 +227,7 @@ def evaluate_threat_with_llm(package: str, threat_records: list[dict]) -> dict:
     if not key or not threat_records:
         return {"is_threat": False, "reason": "No threat intel available."}
 
-    client = Groq(api_key=key)
+    client = Groq(api_key=key, timeout=10.0)
     
     intel_text = "\n\n".join([
         f"Source: {t.get('source')}\nTitle: {t.get('title')}\nDescription: {t.get('description')}"
@@ -252,11 +266,14 @@ def generate_ai_analysis(package: str, cve_id: str, description: str) -> str:
     """
     Uses Groq to generate a plain-English security analysis.
     """
+    if cve_id in AI_ANALYSIS_CACHE:
+        return AI_ANALYSIS_CACHE[cve_id]
+
     key = get_groq_key()
     if not key:
         return ""
 
-    client = Groq(api_key=key)
+    client = Groq(api_key=key, timeout=8.0)
     prompt = f"""Summarize this security vulnerability for a developer.
 Package: {package}
 CVE: {cve_id}
@@ -274,6 +291,8 @@ Keep it under 60 words. No jargon."""
             max_tokens=150,
             temperature=0.2,
         )
-        return completion.choices[0].message.content
+        res = completion.choices[0].message.content
+        AI_ANALYSIS_CACHE[cve_id] = res
+        return res
     except Exception:
         return ""

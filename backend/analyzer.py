@@ -523,9 +523,9 @@ def _analyze_single(dep_info):
     else:
         pkg_desc = f"No known vulnerabilities. {meta_desc}"
 
-    # Generate AI Remediation for any non-SAFE package
+    # Generate AI Remediation for important packages only (Direct or High/Critical)
     reco_reason = ""
-    if sev != "SAFE":
+    if sev != "SAFE" and (depth == 1 or sev in ("CRITICAL", "HIGH")):
         # Async-like behavior: Upsert to Pinecone for future RAG
         for vuln in vulns:
             try:
