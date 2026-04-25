@@ -627,8 +627,8 @@ def analyze_manifest(filename, content, usage_map=None):
     elif "dependencies" in content or "devDependencies" in content:
         # package.json
         all_deps = {}
-        all_deps.update(content.get("dependencies", {}))
-        all_deps.update(content.get("devDependencies", {}))
+        if content.get("dependencies"): all_deps.update(content.get("dependencies"))
+        if content.get("devDependencies"): all_deps.update(content.get("devDependencies"))
         project_name = content.get("name", "project")
         for name, version in all_deps.items():
             deps_to_scan.append({
@@ -638,10 +638,10 @@ def analyze_manifest(filename, content, usage_map=None):
                 "origin": [project_name, name],
             })
     else:
-        raise ValueError("Unrecognized format — expected package.json or package-lock.json")
+        return []
 
     if not deps_to_scan:
-        raise ValueError("No dependencies found in file")
+        return []
 
     # Deduplicate by name+version (keep first occurrence)
     seen = set()

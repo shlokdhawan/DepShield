@@ -1,24 +1,21 @@
-import { useState, useEffect, useRef } from "react";
-import gsap from "gsap";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
+import { useState, useEffect } from "react";
 import { Copy, CountUp, GaugeArc, Chip, Bar } from "./components/UI";
-import { DEPS, PIPE, SEV } from "./components/Data";
+import { SEV } from "./components/Data";
 import Graph from "./components/Graph";
 import Panel from "./components/Panel";
 import {
-  Shield, ShieldAlert, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
-  Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download
+  Shield, ShieldAlert, CheckCircle2, LayoutDashboard,
+  Network, AlertTriangle, Workflow, ArrowRight, Github, PackageOpen, Download, ServerCog, Check, X
 } from "lucide-react";
 
-gsap.registerPlugin(ScrollTrigger);
-
 export default function App() {
-  const [phase, setPhase] = useState("input"); // input | pipeline | main
   const [tab, setTab] = useState("dashboard");
   const [inputTab, setInputTab] = useState("url"); // url | file
-  const [step, setStep] = useState(-1);
-  const [done, setDone] = useState([]);
   const [url, setUrl] = useState("");
+
+  const [phase, setPhase] = useState("input"); // input | pipeline | skeletons | main
+  const [pStep, setPStep] = useState(-1);
+
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState("");
   const [sel, setSel] = useState(null);
@@ -26,64 +23,69 @@ export default function App() {
   const [sCol, setSCol] = useState("score");
   const [sDir, setSDir] = useState("desc");
 
-  // Custom Cursor Logic
-  useEffect(() => {
-    const cursor = document.createElement("div");
-    cursor.id = "custom-cursor";
-    document.body.appendChild(cursor);
-
-    const moveCursor = (e) => {
-      cursor.style.left = e.clientX + 'px';
-      cursor.style.top = e.clientY + 'px';
-    };
-
-    const handleHover = (e) => {
-      const target = e.target.closest('button, a, input, [role="button"], tr');
-      if (target) cursor.classList.add('hover');
-      else cursor.classList.remove('hover');
-    };
-
-    window.addEventListener('mousemove', moveCursor);
-    window.addEventListener('mouseover', handleHover);
-
-    return () => {
-      window.removeEventListener('mousemove', moveCursor);
-      window.removeEventListener('mouseover', handleHover);
-      if (document.getElementById("custom-cursor")) {
-        document.body.removeChild(cursor);
-      }
-    };
-  }, []);
-
   const TABS = [
     { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={14} /> },
-    { id: "graph", label: "Dependency Graph", icon: <Network size={14} /> },
-    { id: "vulns", label: "Vulnerabilities", icon: <AlertTriangle size={14} /> },
-    { id: "fixes", label: "Fix Plan", icon: <Workflow size={14} /> },
+    { id: "graph", label: "Topology", icon: <Network size={14} /> },
+    { id: "vulns", label: "Security Ledger", icon: <AlertTriangle size={14} /> },
+    { id: "fixes", label: "Action Plan", icon: <Workflow size={14} /> },
+  ];
+
+  const PIPE = [
+    "Initializing secure analysis container...",
+    "Resolving complete dependency graph...",
+    "Querying OSV vulnerability endpoints...",
+    "Evaluating NPM registry maintainer metrics...",
+    "Executing contextual impact analysis...",
+    "Finalizing critical security vectors..."
   ];
 
   const API = "";
 
   const runPipeline = async (backendPromise) => {
-    setPhase("pipeline"); setStep(-1); setDone([]);
+    setPhase("pipeline");
+    setPStep(-1);
+    setScanResult(null);
+    setScanError("");
+    setTab("dashboard");
+
+    let isBackendDone = false;
+    const wrappedPromise = backendPromise.then(res => {
+      isBackendDone = true;
+      return res;
+    }).catch(err => {
+      isBackendDone = true;
+      throw err;
+    });
+
     for (let i = 0; i < PIPE.length - 1; i++) {
-      await new Promise(r => setTimeout(r, 120)); setStep(i);
-      await new Promise(r => setTimeout(r, 600));
-      setDone(p => [...p, i]);
+      setPStep(i);
+      await new Promise(r => setTimeout(r, 600)); // 600ms per step
     }
-    setStep(PIPE.length - 1);
-    await Promise.all([
-      new Promise(r => setTimeout(r, 800)),
-      backendPromise
-    ]);
-    setDone(p => [...p, PIPE.length - 1]);
-    await new Promise(r => setTimeout(r, 400));
+    setPStep(PIPE.length - 1);
+    await new Promise(r => setTimeout(r, 500));
+
+    if (!isBackendDone) {
+      setPhase("skeletons");
+    }
+
+    try {
+      const result = await wrappedPromise;
+      if (result.error) throw new Error(result.error);
+      if (Array.isArray(result)) {
+        setScanResult(result);
+        setPhase("main");
+      } else {
+        throw new Error("Unexpected response from server.");
+      }
+    } catch (err) {
+      setScanError(err.message);
+      setPhase("input");
+    }
   };
 
-  const startURLScan = async () => {
+  const startURLScan = () => {
     if (!url.trim()) return;
-    setScanError("");
-    const fetchPromise = fetch(`${API}/api/scan`, {
+    const p = fetch(`${API}/api/scan`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ repoUrl: url }),
     }).then(async r => {
@@ -92,24 +94,17 @@ export default function App() {
         throw new Error(errData.error || `Server responded with ${r.status}`);
       }
       return r.json();
-    }).catch(err => ({ error: err.message }));
-
-    await runPipeline(fetchPromise);
-    const result = await fetchPromise;
-
-    if (result.error) { setScanError(result.error); setPhase("input"); return; }
-    if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
-    else { setScanError("Unexpected response from server."); setPhase("input"); }
+    });
+    runPipeline(p);
   };
 
-  const startFileScan = async (file) => {
+  const startFileScan = (file) => {
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = async (e) => {
+    reader.onload = (e) => {
       let content;
-      try { content = JSON.parse(e.target.result); } catch { setScanError("Invalid JSON file"); return; }
-      setScanError("");
-
-      const fetchPromise = fetch(`${API}/api/scan-file`, {
+      try { content = JSON.parse(e.target.result); } catch { setScanError("Invalid JSON file. Please verify format."); setPhase("input"); return; }
+      const p = fetch(`${API}/api/scan-file`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, content }),
       }).then(async r => {
@@ -118,19 +113,13 @@ export default function App() {
           throw new Error(errData.error || `Server responded with ${r.status}`);
         }
         return r.json();
-      }).catch(err => ({ error: err.message }));
-
-      await runPipeline(fetchPromise);
-      const result = await fetchPromise;
-
-      if (result.error) { setScanError(result.error); setPhase("input"); return; }
-      if (Array.isArray(result)) { setScanResult(result); setPhase("main"); setTab("dashboard"); }
-      else { setScanError("Unexpected response from server."); setPhase("input"); }
+      });
+      runPipeline(p);
     };
     reader.readAsText(file);
   };
 
-  const activeDeps = scanResult || DEPS;
+  const activeDeps = scanResult || [];
   const crit = activeDeps.filter(d => d.sev === "CRITICAL").length;
   const high = activeDeps.filter(d => d.sev === "HIGH").length;
   const med = activeDeps.filter(d => d.sev === "MEDIUM").length;
@@ -140,14 +129,11 @@ export default function App() {
 
   const total = activeDeps.length || 1;
   const safeCount = total - crit - high - med - low;
-  // GPA-style weighted average: each dep scores based on severity
-  // SAFE=100, LOW=50, MEDIUM=15, HIGH=5, CRITICAL=0
   const healthScore = (safeCount * 100 + low * 50 + med * 15 + high * 5 + crit * 0) / total;
-  // Absolute penalty for critical/high so dangerous repos can't hide behind many safe deps
   const sevPenalty = Math.min(50, crit * 15 + high * 5);
   const risk = Math.max(0, Math.min(100, Math.round(healthScore - sevPenalty)));
   const grade = risk >= 90 ? "A" : risk >= 75 ? "B" : risk >= 55 ? "C" : risk >= 35 ? "D" : "F";
-  const gc = risk >= 75 ? "#2dd4bf" : risk >= 55 ? "#f59e0b" : risk >= 35 ? "#f97316" : "#ef4444";
+  const gc = risk >= 75 ? "#10B981" : risk >= 55 ? "#F59E0B" : risk >= 35 ? "#F97316" : "#EF4444";
 
   const rows = [...activeDeps]
     .filter(d => filt === "All" || d.sev === filt)
@@ -156,66 +142,37 @@ export default function App() {
   const doSort = c => { if (sCol === c) setSDir(d => d === "asc" ? "desc" : "asc"); else { setSCol(c); setSDir("desc"); } };
   const fixes = activeDeps.filter(d => d.sev !== "SAFE" && d.fix).sort((a, b) => b.score - a.score);
 
-  // GSAP Animations
-  const mainRef = useRef(null);
-  useEffect(() => {
-    if (!mainRef.current) return;
-    const ctx = gsap.context(() => {
-      // Stagger elements with class 'gsap-stagger'
-      gsap.fromTo(".gsap-stagger",
-        { y: 30, opacity: 0 },
-        { y: 0, opacity: 1, duration: 0.8, stagger: 0.1, ease: "power3.out" }
-      );
-    }, mainRef);
-    return () => ctx.revert();
-  }, [phase, tab]);
-
   const Stat = ({ label, val, color, sub }) => (
-    <div className="glass-panel rounded-3xl p-6 relative overflow-hidden group hover:-translate-y-1 transition-all duration-300">
-      <div className="absolute top-0 right-0 w-32 h-32 bg-[radial-gradient(ellipse_at_top_right,var(--tw-gradient-stops))] from-white/5 to-transparent blur-xl pointer-events-none opacity-50 group-hover:opacity-100 transition-opacity" />
-      <div className="flex justify-between items-start">
-        <div>
-          <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 font-mono">{label}</p>
-          <div className="font-head text-4xl font-bold leading-none mb-2" style={{ color, textShadow: `0 0 20px color-mix(in srgb, ${color} 30%, transparent)` }}>
-            {phase === "main" ? <CountUp n={val} /> : val}
-          </div>
-          {sub && <p className="text-xs text-ghost/50 font-mono tracking-wide mt-3">{sub}</p>}
+    <div className="glass-panel rounded-2xl p-6 relative flex flex-col justify-between min-h-[140px] transform transition-transform hover:-translate-y-1">
+      <div>
+        <p className="text-sm font-bold uppercase tracking-wider text-ghost/60 mb-1">{label}</p>
+        <div className="text-4xl font-bold tracking-tight mt-1" style={{ color }}>
+          {phase === "main" ? <CountUp n={val} /> : val}
         </div>
-        <div className="w-1.5 h-12 rounded-full opacity-80 mt-1 shadow-[0_0_12px_currentColor]" style={{ backgroundColor: color, color }} />
       </div>
+      {sub && <p className="text-sm border-t border-white/5 pt-3 mt-4 text-ghost/50">{sub}</p>}
     </div>
   );
 
-  const goHome = () => {
-    setPhase("input");
-    setScanResult(null);
-    setScanError("");
-    setTab("dashboard");
-    setSel(null);
-    setUrl("");
-  };
-
   return (
     <>
-      <div className="noise-overlay" />
+      <div className="apple-aura" />
 
-      {/* ── NAV "The Floating Island" ── */}
-      <header className="fixed top-6 left-1/2 -translate-x-1/2 z-50 w-[95%] max-w-7xl glass-panel rounded-full px-6 py-3 flex items-center justify-between shadow-[0_10px_40px_rgba(0,0,0,0.5)] border border-white/10 transition-all duration-300">
-        <div onClick={goHome} className="flex items-center gap-3 cursor-pointer group">
-          <div className="w-10 h-10 rounded-[14px] bg-primary flex items-center justify-center text-white shadow-[0_0_15px_rgba(123,97,255,0.4)] group-hover:shadow-[0_0_20px_rgba(123,97,255,0.6)] transition-all">
-            <Shield size={20} className="group-hover:scale-110 transition-transform" />
+      {/* ── HEADER ── */}
+      <header className="fixed top-0 left-0 w-full z-50 bg-background/80 backdrop-blur-md border-b border-white/5 px-6 py-4 flex items-center justify-between transition-all">
+        <div onClick={() => { setPhase("input"); setScanError(""); }} className="flex items-center gap-3 cursor-pointer group">
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-background shadow-lg shadow-primary/30">
+            <Shield size={18} />
           </div>
-          <span className="font-head text-lg font-bold tracking-tight">DepShield</span>
+          <span className="font-bold text-lg tracking-tight">DepShield</span>
         </div>
 
         {phase === "main" && (
-          <nav className="hidden md:flex items-center gap-1">
+          <nav className="hidden md:flex items-center gap-2">
             {TABS.map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full font-body text-sm font-medium transition-all duration-300 relative overflow-hidden ${tab === t.id ? "text-primary bg-primary/10 shadow-[inner_0_0_10px_rgba(123,97,255,0.1)]" : "text-ghost/60 hover:text-ghost hover:bg-white/5"
-                  }`}>
-                {tab === t.id && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-1 bg-primary rounded-t-full shadow-[0_0_8px_rgba(123,97,255,0.8)]" />}
-                <span className={`${tab === t.id ? "text-primary" : "text-ghost/40"}`}>{t.icon}</span>
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${tab === t.id ? "bg-primary/10 text-primary border border-primary/20" : "text-ghost/60 hover:text-ghost hover:bg-white/5 border border-transparent"}`}>
+                {t.icon}
                 {t.label}
               </button>
             ))}
@@ -223,197 +180,219 @@ export default function App() {
         )}
 
         <div className="flex items-center gap-4">
-          {phase === "main" && (
-            <div className="hidden lg:flex items-center gap-4 mr-2">
-              <span className="text-xs text-ghost/40 font-mono tracking-wide truncate max-w-[150px]">{url || "scanned project"}</span>
-              <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-400/10 border border-teal-400/20 text-teal-400 text-xs font-mono tracking-wide relative overflow-hidden">
-                <span className="w-1.5 h-1.5 rounded-full bg-teal-400 shadow-[0_0_5px_currentColor] animate-pulse" />
-                <span className="font-semibold mix-blend-screen text-[10px] uppercase">System Operational</span>
-              </span>
-            </div>
-          )}
+          <span className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded-lg text-sm font-mono font-medium">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-[pulse-op_2s_infinite]" />
+            System Active
+          </span>
         </div>
       </header>
 
-      <main ref={mainRef} className="min-h-screen pt-32 pb-20 px-6 sm:px-12 relative z-10">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[800px] bg-primary/20 blur-[120px] rounded-full pointer-events-none opacity-20" />
+      <main className="min-h-screen pt-28 pb-20 px-6 sm:px-12 relative z-10 max-w-[1400px] mx-auto">
 
-        {/* ── INPUT SCREEN ── */}
+        {/* ── ERROR TOAST ── */}
+        {scanError && (
+          <div className="mb-8 w-full max-w-2xl mx-auto bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl p-4 text-sm flex items-start flex-col sm:flex-row gap-4 shadow-lg animate-[pulse-op_2s]">
+            <AlertTriangle size={20} className="shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <span className="block font-bold mb-1">Scan Failed</span>
+              <span className="text-red-400/80">{scanError}</span>
+            </div>
+            <button onClick={() => setScanError("")} className="text-red-400 hover:text-red-300 text-sm uppercase font-bold tracking-wider">Dismiss</button>
+          </div>
+        )}
+
+        {/* ── INPUT PHASE ── */}
         {phase === "input" && (
-          <div className="max-w-2xl mx-auto pt-16">
-            <div className="text-center mb-16 gsap-stagger">
-              <h1 className="font-drama text-6xl md:text-7xl lg:text-[80px] leading-[0.9] tracking-tight mb-6">
-                Dependency Risk <br />
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-purple-400 to-ghost italic pr-2">Analyzer</span>
+          <div className="max-w-xl mx-auto pt-16 animate-in fade-in duration-500">
+            <div className="text-center mb-12">
+              <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+                Dependancy Risk <span className="text-primary">Analyzer</span>
               </h1>
-              <p className="text-ghost/60 text-lg font-body max-w-lg mx-auto leading-relaxed">
-                Genome-level sequencing for your frontend ecosystem. Detect vulnerabilities, abandoned packages, and prototype pollution in real time.
+              <p className="text-ghost/60 text-base leading-relaxed">
+                Seamlessly evaluate Node.js ecosystems for abandoned supply chains and zero-day vulnerabilities.
               </p>
             </div>
 
-            <div className="glass-panel p-8 rounded-[2rem] gsap-stagger relative overflow-hidden">
-              <div className="absolute inset-0 bg-gradient-to-b from-white-[0.03] to-transparent pointer-events-none" />
-
-              <div className="flex gap-2 mb-8 bg-surface border border-white/10 p-1.5 rounded-2xl relative z-10">
-                {[{ id: "url", label: "GitHub URL", icon: <Github size={16} /> }, { id: "file", label: "Upload Manifest", icon: <PackageOpen size={16} /> }].map(t => (
-                  <button key={t.id} onClick={() => setInputTab(t.id)}
-                    className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-body text-sm font-semibold transition-all duration-300 ${inputTab === t.id ? "bg-background text-ghost shadow-lg border border-white/5" : "text-ghost/40 hover:text-ghost/80"
-                      }`}>
-                    {t.icon} {t.label}
-                  </button>
-                ))}
-              </div>
-
-              {scanError && <div className="bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl p-4 mb-6 text-sm font-mono flex items-center gap-3">
-                <AlertTriangle size={16} /> {scanError}
-              </div>}
-
-              {inputTab === "url" ? (
-                <div className="relative z-10">
-                  <div className="mb-6 relative">
-                    <input type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/repo"
-                      className="w-full bg-background border border-white/10 rounded-2xl px-5 py-4 text-ghost font-mono text-sm focus:outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all placeholder:text-ghost/20" />
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 px-2 py-1 rounded bg-white/5 text-[10px] font-mono text-ghost/40 border border-white/10">URL</div>
-                  </div>
-                  <button onClick={startURLScan}
-                    className="w-full btn-vapor-primary text-lg py-4">
-                    <span className="mr-2 text-xl">✦</span> Extract & Analyze
-                  </button>
+            <div className="glass-panel p-2 rounded-[2rem]">
+              <div className="p-6">
+                <div className="flex gap-2 mb-6 bg-background rounded-xl p-1.5 border border-white/5">
+                  {[{ id: "url", label: "GitHub URL", icon: <Github size={16} /> }, { id: "file", label: "File Upload", icon: <PackageOpen size={16} /> }].map(t => (
+                    <button key={t.id} onClick={() => setInputTab(t.id)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${inputTab === t.id ? "bg-surface shadow-[0_2px_10px_rgba(0,0,0,0.5)] border border-white/5 text-ghost" : "text-ghost/40 hover:text-ghost/80"
+                        }`}>
+                      {t.icon} {t.label}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <label onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) startFileScan(file); }}
-                  onDragOver={e => e.preventDefault()}
-                  className="relative z-10 flex flex-col items-center justify-center border-2 border-dashed border-white/10 hover:border-primary/50 hover:bg-primary/5 rounded-2xl p-12 cursor-pointer transition-all duration-300 group">
-                  <div className="w-16 h-16 rounded-2xl bg-surface border border-white/10 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:shadow-[0_0_20px_rgba(123,97,255,0.3)] transition-all">
-                    <Download size={24} className="text-primary" />
+
+                {inputTab === "url" ? (
+                  <div className="flex flex-col gap-4">
+                    <input type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/repository"
+                      className="w-full bg-background border border-white/10 rounded-xl px-4 py-3.5 text-ghost font-mono text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-ghost/20 outline-none" />
+                    <button onClick={startURLScan} className="btn-vapor-primary text-base py-3.5 mt-2 w-full">
+                      Initialize Scan
+                    </button>
                   </div>
-                  <div className="text-ghost font-semibold text-[15px] mb-2 tracking-wide">Drop package.json here</div>
-                  <div className="text-ghost/40 text-xs font-mono">or click to browse local files</div>
-                  <input type="file" accept=".json" className="hidden" onChange={(e) => { const file = e.target.files[0]; if (file) startFileScan(file); }} />
-                </label>
-              )}
+                ) : (
+                  <label onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) startFileScan(file); }}
+                    onDragOver={e => e.preventDefault()}
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-white/10 hover:border-primary/50 hover:bg-primary/5 rounded-xl p-12 cursor-pointer transition-all">
+                    <div className="w-14 h-14 rounded-xl bg-background border border-white/5 flex items-center justify-center mb-4 shadow-sm text-primary">
+                      <Download size={20} />
+                    </div>
+                    <div className="font-semibold text-sm mb-1 tracking-wide">Drop package.json here</div>
+                    <div className="text-ghost/40 text-sm">or click to browse local files</div>
+                    <input type="file" accept=".json" className="hidden" onClick={e => { e.target.value = null; }} onChange={(e) => { const file = e.target.files[0]; if (file) startFileScan(file); }} />
+                  </label>
+                )}
+              </div>
             </div>
           </div>
         )}
 
-        {/* ── PIPELINE ── */}
+        {/* ── PIPELINE ANIMATION PHASE ── */}
         {phase === "pipeline" && (
-          <div className="max-w-2xl mx-auto pt-16">
-            <div className="text-center mb-12 gsap-stagger">
-              <div className="inline-flex w-16 h-16 bg-primary/10 border border-primary/20 rounded-2xl items-center justify-center mb-6 shadow-[0_0_30px_rgba(123,97,255,0.2)]">
-                <Zap size={28} className="text-primary animate-pulse" />
+          <div className="max-w-xl mx-auto pt-24 text-left animate-in fade-in duration-300">
+            <h2 className="text-3xl font-bold tracking-tight mb-8 text-center flex items-center justify-center gap-4">
+              <ServerCog className="text-primary animate-[spin_4s_linear_infinite]" size={28} />
+              System Core Initializing
+            </h2>
+            <div className="glass-panel p-6 rounded-2xl flex flex-col gap-5 border border-white/10 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 blur-[80px] pointer-events-none rounded-full" />
+              {PIPE.map((txt, i) => (
+                <div key={i} className={`flex items-center gap-4 transition-all duration-500 transform ${i <= pStep ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+                  {i < pStep ? (
+                    <div className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                      <Check size={14} className="stroke-[3]" />
+                    </div>
+                  ) : i === pStep ? (
+                    <div className="w-6 h-6 rounded-full border-[3px] border-primary border-t-transparent animate-spin shrink-0" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full border border-white/10 shrink-0 bg-white/5" />
+                  )}
+                  <span className={`text-sm font-medium ${i < pStep ? 'text-ghost text-emerald-400' : i === pStep ? 'text-ghost' : 'text-ghost/30'}`}>{txt}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── LOADING PHASE (SKELETONS) ── */}
+        {phase === "skeletons" && (
+          <div className="max-w-7xl mx-auto pt-6 w-full animate-pulse">
+            <div className="flex items-center gap-4 mb-8 w-full glass-panel rounded-2xl p-6 relative overflow-hidden">
+              <ServerCog size={24} className="text-primary/50 animate-bounce" />
+              <div>
+                <div className="font-bold tracking-tight text-lg text-ghost/80">Cross-referencing global vulnerability databases</div>
+                <div className="text-sm text-ghost/50 mt-1">Downloading metadata components...</div>
               </div>
-              <h2 className="font-drama text-5xl leading-none mb-4 italic tracking-tight">Sequencing Repository</h2>
-              <p className="text-ghost/40 text-sm font-mono max-w-md mx-auto truncate px-4">{url || "Local manifest file"}</p>
             </div>
 
-            <div className="glass-panel rounded-3xl overflow-hidden gsap-stagger p-2">
-              {PIPE.map((s, i) => {
-                const isDone = done.includes(i), isAct = step === i && !isDone;
-                return (
-                  <div key={i} className={`flex items-center gap-4 px-6 py-4 rounded-2xl transition-all duration-500 relative overflow-hidden ${isAct ? "bg-primary/10 border border-primary/20 shadow-[inset_0_0_20px_rgba(123,97,255,0.1)]" : "border border-transparent"
-                    }`} style={{ opacity: step < i && !isDone ? 0.3 : 1 }}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="glass-panel rounded-2xl p-6 h-[140px] flex flex-col justify-between">
+                  <div className="w-1/2 h-3 bg-white/10 rounded" />
+                  <div className="w-16 h-10 bg-white/5 rounded-md mt-4" />
+                  <div className="w-3/4 h-2 bg-white/10 rounded mt-auto" />
+                </div>
+              ))}
+            </div>
 
-                    {isAct && <div className="absolute top-0 left-0 w-1 h-full bg-primary shadow-[0_0_10px_rgba(123,97,255,0.8)] animate-pulse" />}
-
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all duration-500 border ${isDone ? "bg-teal-400/10 border-teal-400/30 shadow-[0_0_15px_rgba(45,212,191,0.2)]" : isAct ? "bg-primary border-primary shadow-[0_0_15px_rgba(123,97,255,0.4)] text-[#0A0A14]" : "bg-white/5 border-white/10"
-                      }`}>
-                      {isDone ? <CheckCircle2 size={16} className="text-teal-400" /> : isAct ? <span className="spinner-vapor !border-[#0A0A14]/20 !border-t-[#0A0A14]" /> : <span className="text-xs font-mono font-bold text-ghost/40">{i + 1}</span>}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-3 glass-panel rounded-2xl p-8 h-[380px] flex flex-col items-center justify-center gap-6">
+                <div className="w-32 h-32 rounded-full border-8 border-white/5" />
+                <div className="w-16 h-12 bg-white/5 rounded" />
+              </div>
+              <div className="lg:col-span-6 glass-panel rounded-2xl p-6 h-[380px]">
+                <div className="w-1/3 h-4 bg-white/10 rounded mb-8" />
+                <div className="space-y-4">
+                  {[...Array(4)].map((_, i) => <div key={i} className="w-full h-12 bg-white/10 rounded-lg" />)}
+                </div>
+              </div>
+              <div className="lg:col-span-3 glass-panel rounded-2xl p-6 h-[380px]">
+                <div className="w-1/2 h-4 bg-white/10 rounded mb-8" />
+                <div className="space-y-6">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i}>
+                      <div className="w-full justify-between flex mb-3"><div className="w-16 h-4 bg-white/5 rounded" /><div className="w-6 h-4 bg-white/5 rounded" /></div>
+                      <div className="w-full h-2 bg-white/10 rounded-full" />
                     </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-sm font-bold tracking-wide transition-colors duration-500 ${isDone ? "text-teal-400" : isAct ? "text-primary" : "text-ghost/80"}`}>{s.label}</div>
-                      <div className="text-xs text-ghost/40 mt-1 font-mono tracking-wide">{s.desc}</div>
-                    </div>
-
-                    {isAct && (
-                      <div className="w-20 h-1.5 bg-background rounded-full overflow-hidden shrink-0 border border-white/5">
-                        <div className="w-1/2 h-full bg-primary rounded-full animate-[shimmer-move_1s_linear_infinite]" />
-                      </div>
-                    )}
-                    {isDone && <span className="text-teal-400 text-[10px] font-mono font-bold uppercase tracking-widest shrink-0">Done</span>}
-                  </div>
-                );
-              })}
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}
 
         {/* ── MAIN VIEWS ── */}
-        {phase === "main" && (
-          <div className="max-w-[1400px] mx-auto">
-
+        {phase === "main" && scanResult && (
+          <div className="max-w-7xl mx-auto pt-6 animate-in fade-in duration-500">
             {/* DASHBOARD */}
             {tab === "dashboard" && (
               <div className="flex flex-col gap-6">
-                {/* Stats Row */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 gsap-stagger">
-                  <Stat label="Total Scanned" val={activeDeps.length} color="#7B61FF" sub="Packages mapped" />
-                  <Stat label="Critical Vulns" val={crit} color="#ef4444" sub="Immediate action needed" />
-                  <Stat label="Need Upgrade" val={upg} color="#f97316" sub="Outdated versions" />
-                  <Stat label="Abandoned Libs" val={aband} color="#f59e0b" sub="No maintainer" />
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <Stat label="Mapped Dependencies" val={activeDeps.length} color="#7B61FF" sub="Total packages tracked" />
+                  <Stat label="Critical Threats" val={crit} color="#EF4444" sub="Immediate patches required" />
+                  <Stat label="Outdated Versions" val={upg} color="#F59E0B" sub="Updates available" />
+                  <Stat label="Abandoned Libraries" val={aband} color="#F97316" sub="Lacking active maintainers" />
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   {/* Grade Card */}
-                  <div className="lg:col-span-3 glass-panel rounded-3xl p-8 flex flex-col items-center justify-center text-center gsap-stagger relative overflow-hidden">
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops))] from-white/5 to-transparent pointer-events-none" />
+                  <div className="lg:col-span-3 glass-panel rounded-2xl p-8 flex flex-col items-center justify-center text-center">
                     <GaugeArc value={risk} size={140} />
-                    <div className="mt-8 font-drama text-8xl leading-none italic" style={{ color: gc, textShadow: `0 0 30px color-mix(in srgb, ${gc} 40%, transparent)` }}>{grade}</div>
-                    <div className="mt-4 text-[11px] font-bold uppercase tracking-widest text-ghost/40 font-mono">System Grade</div>
+                    <div className="mt-8 font-bold text-7xl leading-none" style={{ color: gc }}>{grade}</div>
+                    <div className="mt-4 text-sm font-bold uppercase tracking-widest text-ghost/40">Audit Grade</div>
                   </div>
 
                   {/* Critical List */}
-                  <div className="lg:col-span-6 glass-panel rounded-3xl overflow-hidden flex flex-col gsap-stagger">
-                    <div className="p-6 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
-                      <h3 className="text-sm font-bold tracking-wide flex items-center gap-3">
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-pulse" />
-                        Critical Vulnerabilities
-                      </h3>
+                  <div className="lg:col-span-6 glass-panel rounded-2xl overflow-hidden flex flex-col">
+                    <div className="p-5 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">Critical Threat Vector</h3>
                       <Chip sev="CRITICAL" />
                     </div>
                     <div className="flex-1 overflow-y-auto max-h-[400px] divide-y divide-white/5">
                       {activeDeps.filter(d => d.sev === "CRITICAL").map(d => (
-                        <div key={d.id} onClick={() => setSel(d)} className="p-5 flex justify-between items-center hover:bg-white/5 cursor-pointer transition-colors group">
+                        <div key={d.id} onClick={() => setSel(d)} className="p-4 flex justify-between items-center hover:bg-white/5 cursor-pointer transition-colors group">
                           <div>
-                            <div className="font-bold text-sm tracking-wide gap-3 flex items-center">
-                              {d.name} <span className="text-xs font-mono text-ghost/40 font-normal">v{d.version}</span>
+                            <div className="font-bold text-sm flex items-center gap-2">
+                              {d.name} <span className="text-sm font-mono text-ghost/40 font-normal">v{d.version}</span>
                             </div>
-                            <div className="text-[11px] text-red-500/80 font-mono tracking-wider mt-2 flex items-center gap-2">
+                            <div className="text-sm text-red-400 font-mono mt-1 flex items-center gap-1.5">
                               <ShieldAlert size={12} /> {d.cves.join(" · ")}
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="font-head text-2xl font-bold text-red-500 leading-none group-hover:scale-110 transition-transform origin-right drop-shadow-[0_0_10px_rgba(239,68,68,0.3)]">{d.score}</div>
-                            <div className="text-[10px] text-ghost/40 font-mono mt-1">CVSS</div>
+                            <div className="font-bold text-xl text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.2)]">{d.score}</div>
+                            <div className="text-sm text-ghost/40 font-mono mt-0.5">CVSS</div>
                           </div>
                         </div>
                       ))}
                       {activeDeps.filter(d => d.sev === "CRITICAL").length === 0 && (
-                        <div className="p-12 text-center text-ghost/40 flex flex-col items-center justify-center border-2 border-dashed border-white/5 m-6 rounded-2xl">
-                          <CheckCircle2 size={32} className="text-teal-400/50 mb-4" />
-                          <div className="font-mono text-sm">No critical vulnerabilities detected.</div>
+                        <div className="h-full flex flex-col items-center justify-center p-8 text-ghost/40">
+                          <CheckCircle2 size={32} className="text-emerald-500 mb-3 opacity-80" />
+                          <div className="text-sm">No critical vulnerabilities detected.</div>
                         </div>
                       )}
                     </div>
                   </div>
 
                   {/* Severity Breakdown */}
-                  <div className="lg:col-span-3 glass-panel rounded-3xl p-6 relative overflow-hidden gsap-stagger flex flex-col justify-center">
-                    <h3 className="text-sm font-bold tracking-wide mb-8">Severity Breakdown</h3>
-                    <div className="flex flex-col gap-5">
+                  <div className="lg:col-span-3 glass-panel rounded-2xl p-6 flex flex-col justify-center">
+                    <h3 className="text-sm font-semibold mb-6">Severity Distribution</h3>
+                    <div className="flex flex-col gap-4">
                       {["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"].map(s => {
                         const cnt = activeDeps.filter(d => d.sev === s).length;
                         const pct = activeDeps.length ? (cnt / activeDeps.length) * 100 : 0;
                         const c = SEV[s];
                         return (
                           <div key={s}>
-                            <div className="flex justify-between items-center mb-3">
+                            <div className="flex justify-between items-center mb-2">
                               <Chip sev={s} />
-                              <span className="text-xs font-mono font-bold text-ghost/60">{cnt}</span>
+                              <span className="text-sm font-mono font-medium text-ghost/60">{cnt}</span>
                             </div>
-                            <div className="bg-background rounded-full h-1.5 overflow-hidden border border-white/5">
-                              <div className="h-full rounded-full transition-all duration-1000 ease-out" style={{ width: `${pct}%`, backgroundColor: c.hex, boxShadow: `0 0 10px ${c.hex}` }} />
+                            <div className="bg-background rounded-full h-1 overflow-hidden border border-white/5">
+                              <div className="h-full rounded-full transition-all duration-1000 ease-out" style={{ width: `${pct}%`, backgroundColor: c.hex }} />
                             </div>
                           </div>
                         );
@@ -423,26 +402,19 @@ export default function App() {
                 </div>
 
                 {/* Abandoned Libs Section */}
-                <div className="glass-panel rounded-3xl overflow-hidden gsap-stagger">
-                  <div className="p-6 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
-                    <h3 className="text-sm font-bold tracking-wide">Abandoned & Inactive Libraries</h3>
-                    <span className="px-3 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-full text-xs font-mono font-bold">
-                      {activeDeps.filter(d => d.maint !== "Active").length} found
-                    </span>
+                <div className="glass-panel rounded-2xl overflow-hidden">
+                  <div className="p-5 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
+                    <h3 className="text-sm font-semibold">Flagged Maintenance Issues</h3>
                   </div>
-                  <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     {activeDeps.filter(d => d.maint !== "Active").map(d => (
                       <div key={d.id} onClick={() => setSel(d)}
-                        className={`bg-surface/50 border rounded-2xl p-5 cursor-pointer transition-all duration-300 relative overflow-hidden group ${d.maint === "Abandoned" ? "border-amber-500/30 hover:border-amber-500/60 shadow-[inset_0_0_15px_rgba(245,158,11,0.05)] hover:shadow-[0_0_20px_rgba(245,158,11,0.2)]" : "border-white/10 hover:border-white/30"
-                          }`}>
-                        {d.maint === "Abandoned" && <div className="absolute top-0 right-0 w-16 h-16 bg-amber-500 opacity-20 blur-2xl group-hover:opacity-40 transition-opacity" />}
-                        <div className="flex justify-between items-start mb-4 relative z-10">
-                          <div className="font-bold text-sm truncate pr-2 tracking-wide">{d.name}</div>
-                        </div>
-                        <div className="text-xs text-ghost/40 font-mono mb-4 relative z-10">v{d.version}</div>
-                        <div className="flex justify-between items-center relative z-10">
+                        className={`bg-background border rounded-xl p-4 cursor-pointer transition-all hover:shadow-lg hover:-translate-y-0.5 ${d.maint === "Abandoned" ? "border-amber-500/30 hover:border-amber-500/60" : "border-white/5 hover:border-white/20"}`}>
+                        <div className="text-sm font-semibold truncate mb-1">{d.name}</div>
+                        <div className="text-sm text-ghost/40 font-mono mb-3">v{d.version}</div>
+                        <div className="flex justify-between items-center mt-2">
                           <Chip sev={d.sev} />
-                          <span className={`text-[10px] uppercase font-bold tracking-widest ${d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/40"}`}>{d.maint}</span>
+                          <span className={`text-sm tracking-wider font-bold ${d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/50"}`}>{d.maint}</span>
                         </div>
                       </div>
                     ))}
@@ -453,12 +425,10 @@ export default function App() {
 
             {/* GRAPH */}
             {tab === "graph" && (
-              <div className="gsap-stagger">
-                <div className="mb-6 flex justify-between items-end flex-wrap gap-4">
-                  <div>
-                    <h2 className="font-drama text-4xl italic leading-none mb-3">Dependency Topology</h2>
-                    <p className="text-sm text-ghost/60 font-body">Interactive force-directed visualization of {activeDeps.length} packages</p>
-                  </div>
+              <div>
+                <div className="mb-6">
+                  <h2 className="text-2xl font-bold tracking-tight mb-1">Architecture Topology</h2>
+                  <p className="text-sm text-ghost/60">Node tree structure map showing origin lineages.</p>
                 </div>
                 <Graph deps={activeDeps} onPick={setSel} />
               </div>
@@ -466,65 +436,54 @@ export default function App() {
 
             {/* VULNS */}
             {tab === "vulns" && (
-              <div className="gsap-stagger">
-                <div className="mb-6 flex justify-between items-end flex-wrap gap-6">
+              <div>
+                <div className="mb-6 flex justify-between items-end flex-wrap gap-4">
                   <div>
-                    <h2 className="font-drama text-4xl italic leading-none mb-3">Vulnerability Directory</h2>
-                    <p className="text-sm text-ghost/60 font-body">Sortable ledger of all mapped dependencies and risks</p>
+                    <h2 className="text-2xl font-bold tracking-tight mb-1">Security Ledger</h2>
+                    <p className="text-sm text-ghost/60">Comprehensive audit list of all scanned libraries.</p>
                   </div>
-                  <div className="flex gap-2 p-1.5 bg-surface border border-white/5 rounded-2xl">
-                    {["All", "CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"].map(f => {
-                      const c = SEV[f];
-                      const active = filt === f;
-                      return (
-                        <button key={f} onClick={() => setFilt(f)}
-                          className={`px-4 py-2 rounded-xl text-xs font-bold tracking-wide transition-all ${active
-                              ? `${c ? c.bg : 'bg-background'} ${c ? c.color : 'text-ghost'} shadow-lg border ${c ? c.border : 'border-white/10'}`
-                              : "bg-transparent text-ghost/40 hover:text-ghost/80 border border-transparent"
-                            }`}>
-                          {f}
-                        </button>
-                      );
-                    })}
+                  <div className="flex gap-1 p-1 bg-surface border border-white/5 rounded-lg overflow-x-auto">
+                    {["All", "CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"].map(f => (
+                      <button key={f} onClick={() => setFilt(f)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-bold tracking-wide transition-all whitespace-nowrap ${filt === f ? 'bg-background text-ghost shadow-sm border border-white/10' : 'text-ghost/40 hover:text-ghost border border-transparent'}`}>
+                        {f}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                <div className="glass-panel rounded-3xl overflow-hidden shadow-2xl">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                <div className="glass-panel rounded-2xl overflow-hidden shadow-lg">
+                  <div>
+                    <table className="w-full text-left border-collapse text-sm">
                       <thead>
                         <tr className="bg-white/[0.02]">
-                          {[["name", "Library"], ["version", "Version"], ["latest", "Latest"], ["sev", "Severity"], ["score", "Danger"], ["vulns", "CVEs"], ["maint", "Maintainer"]].map(([c, l]) => (
-                            <th key={c} onClick={() => doSort(c)} className="p-5 text-[11px] font-bold uppercase tracking-widest text-ghost/40 border-b border-white/10 cursor-pointer hover:text-ghost/80 hover:bg-white/5 transition-all outline-none whitespace-nowrap">
-                              <div className="flex items-center gap-2">
-                                {l}
-                                <span className={`text-[#7B61FF] ${sCol === c ? 'opacity-100' : 'opacity-0'}`}>{sDir === "asc" ? "↑" : "↓"}</span>
-                              </div>
+                          {[["name", "Library"], ["version", "Version"], ["latest", "Latest"], ["sev", "Severity"], ["score", "Score"], ["vulns", "CVEs"], ["maint", "Maintainer"]].map(([c, l]) => (
+                            <th key={c} onClick={() => doSort(c)} className="p-4 text-sm uppercase font-bold tracking-widest text-ghost/50 border-b border-white/5 cursor-pointer hover:bg-white/5">
+                              <span className="flex items-center gap-2">{l} <span className={`${sCol === c ? 'opacity-100 text-primary' : 'opacity-0'}`}>{sDir === "asc" ? "↑" : "↓"}</span></span>
                             </th>
                           ))}
-                          <th className="p-5 text-[11px] font-bold uppercase tracking-widest text-ghost/40 border-b border-white/10">Action</th>
+                          <th className="p-4 text-sm uppercase font-bold tracking-widest text-ghost/50 border-b border-white/5">Log</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
                         {rows.map(d => (
                           <tr key={d.id} onClick={() => setSel(d)} className="hover:bg-white/5 cursor-pointer transition-colors group">
-                            <td className="p-5"><span className="font-bold tracking-wide whitespace-nowrap">{d.name}</span></td>
-                            <td className="p-5"><code className="text-xs font-mono text-ghost/50">{d.version}</code></td>
-                            <td className="p-5"><code className={`text-xs font-mono ${d.version !== d.latest ? 'text-teal-400 font-bold' : 'text-ghost/50'}`}>{d.latest}</code></td>
-                            <td className="p-5"><Chip sev={d.sev} /></td>
-                            <td className="p-5 w-40"><Bar score={d.score} /></td>
-                            <td className="p-5"><span className={`font-mono font-bold ${d.vulns > 0 ? 'text-red-500' : 'text-ghost/20'}`}>{d.vulns}</span></td>
-                            <td className="p-5">
-                              <span className="flex items-center gap-2 text-xs font-mono font-bold">
-                                <span className={`w-1.5 h-1.5 rounded-full ${d.maint === "Active" ? "bg-teal-400" : d.maint === "Abandoned" ? "bg-amber-500" : "bg-ghost/40"}`} />
-                                <span className={d.maint === "Active" ? "text-teal-400" : d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/40"}>{d.maint}</span>
+                            <td className="p-4 font-semibold">{d.name}</td>
+                            <td className="p-4"><code className="text-sm text-ghost/60">{d.version}</code></td>
+                            <td className="p-4"><code className={`text-sm ${d.version !== d.latest ? 'text-primary font-semibold' : 'text-ghost/60'}`}>{d.latest}</code></td>
+                            <td className="p-4"><Chip sev={d.sev} /></td>
+                            <td className="p-4 w-40 max-w-[160px]"><Bar score={d.score} /></td>
+                            <td className="p-4"><span className={`font-mono font-medium text-sm ${d.vulns > 0 ? 'text-red-400' : 'text-ghost/30'}`}>{d.vulns}</span></td>
+                            <td className="p-4">
+                              <span className="flex items-center gap-2 text-sm font-bold tracking-wider">
+                                <span className={`w-2 h-2 rounded-full ${d.maint === "Active" ? "bg-emerald-500" : d.maint === "Abandoned" ? "bg-amber-500" : "bg-ghost/40"}`} />
+                                <span className={d.maint === "Active" ? "text-emerald-500" : d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/40"}>{d.maint}</span>
                               </span>
                             </td>
-                            <td className="p-5">
-                              {d.fix
-                                ? <button className="opacity-0 group-hover:opacity-100 btn-vapor py-2 text-xs px-4" onClick={(e) => { e.stopPropagation(); setSel(d); }}>Inspect <ArrowRight size={14} /></button>
-                                : <span className="text-teal-400/50 text-xs font-bold font-mono py-2 uppercase tracking-widest flex items-center gap-1"><CheckCircle2 size={12} /> Safe</span>
-                              }
+                            <td className="p-4">
+                              <button className="opacity-0 group-hover:opacity-100 text-sm font-semibold text-primary flex items-center gap-1 transition-opacity">
+                                View <ArrowRight size={10} />
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -537,81 +496,51 @@ export default function App() {
 
             {/* FIXES */}
             {tab === "fixes" && (
-              <div className="gsap-stagger max-w-5xl mx-auto">
-                <div className="text-center mb-12">
-                  <h2 className="font-drama text-5xl italic leading-none mb-4">Remediation Protocol</h2>
-                  <p className="text-base text-ghost/60 font-body max-w-lg mx-auto">Ranked actionable intelligence prioritizing highest CVSS score vectors. Resolve top-down to immediately reduce surface area.</p>
+              <div className="max-w-4xl mx-auto">
+                <div className="mb-10 text-center">
+                  <h2 className="text-3xl font-bold tracking-tight mb-2">Remediation Blueprint</h2>
+                  <p className="text-sm text-ghost/60">Ranked actionable fixes targeting the highest CVSS impact vectors.</p>
                 </div>
 
-                <div className="space-y-6">
-                  {fixes.map((d, i) => {
-                    const eff = d.effort === "Easy" ? "text-teal-400 border-teal-400/30 bg-teal-400/10" : d.effort === "Medium" ? "text-yellow-500 border-yellow-500/30 bg-yellow-500/10" : "text-red-500 border-red-500/30 bg-red-500/10";
-                    const col = SEV[d.sev]?.hex;
-
-                    return (
-                      <div key={d.id} className="glass-panel rounded-3xl overflow-hidden border-none shadow-[0_10px_30px_rgba(0,0,0,0.5)] relative">
-                        {/* Status accent line */}
-                        <div className="absolute left-0 top-0 bottom-0 w-1.5 shadow-[0_0_15px_currentColor]" style={{ backgroundColor: col, color: col }} />
-
-                        <div className="p-8 md:p-10 pl-12 relative z-10">
-                          <div className="flex flex-col md:flex-row justify-between md:items-start gap-6 mb-8">
-                            <div className="flex gap-6 items-start">
-                              <div className="font-drama text-5xl font-bold italic leading-none opacity-40 mt-1">
-                                {String(i + 1).padStart(2, '0')}
-                              </div>
-                              <div>
-                                <h3 className="text-2xl font-bold font-head tracking-tight mb-2">{d.name}</h3>
-                                <div className="flex items-center gap-3 font-mono text-sm bg-background border border-white/5 rounded-lg px-3 py-1.5 w-max">
-                                  <span className="text-red-500/80 line-through">v{d.version}</span>
-                                  <ArrowRight size={14} className="text-ghost/40" />
-                                  <span className="text-teal-400 font-bold drop-shadow-[0_0_8px_rgba(45,212,191,0.5)]">v{d.fixv}</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center flex-wrap gap-3 self-start">
-                              <Chip sev={d.sev} />
-                              <span className={`px-3 py-1 border rounded-lg text-xs font-mono font-bold uppercase tracking-widest ${eff}`}>{d.effort} fix</span>
-                              <div className="px-4 py-2 border rounded-xl font-mono text-lg font-bold shadow-[inset_0_0_10px_currentColor]" style={{ color: col, borderColor: `${col}40`, backgroundColor: `${col}10` }}>
-                                {d.score.toFixed(1)}
-                              </div>
-                            </div>
+                <div className="space-y-4">
+                  {fixes.map((d, i) => (
+                    <div key={d.id} className="glass-panel rounded-xl overflow-hidden shadow-sm relative">
+                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-surface" style={{ backgroundColor: SEV[d.sev]?.hex }} />
+                      <div className="p-6 pl-8">
+                        <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-4">
+                          <div>
+                            <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
+                              {d.name}
+                              <span className="bg-background px-2 py-0.5 rounded text-sm font-mono font-normal border border-white/5 text-ghost/50 tracking-wider">v{d.version} &rarr; <span className="text-emerald-400">v{d.fixv}</span></span>
+                            </h3>
                           </div>
-
-                          <div className="mb-8">
-                            <p className="text-ghost/70 leading-relaxed font-body text-sm md:text-base border-l-2 border-white/10 pl-4">{d.desc}</p>
-                          </div>
-
-                          <div className="bg-[#0A0A14] border border-primary/30 rounded-2xl p-4 flex flex-col md:flex-row justify-between md:items-center gap-4 shadow-[0_0_20px_rgba(123,97,255,0.05)]">
-                            <code className="text-primary font-mono text-sm break-all">{d.fix}</code>
-                            <div className="shrink-0"><Copy text={d.fix} size="md" /></div>
+                          <div className="flex items-center gap-2">
+                            <Chip sev={d.sev} />
+                            <span className="px-2 py-1 bg-background border border-white/5 text-ghost/60 rounded text-sm uppercase font-bold tracking-wider">{d.effort} Fix</span>
                           </div>
                         </div>
+
+                        <p className="text-sm text-ghost/70 leading-relaxed mb-4 border-l-2 border-white/10 pl-3">{d.desc}</p>
+
+                        <div className="bg-background border border-white/5 rounded-lg p-3 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                          <code className="text-primary font-mono text-sm break-all tracking-wider">{d.fix}</code>
+                          <Copy text={d.fix} />
+                        </div>
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
+                  {fixes.length === 0 && (
+                    <div className="text-center p-12 glass-panel rounded-2xl text-ghost/50 border-dashed">
+                      <CheckCircle2 size={32} className="mx-auto mb-3 text-emerald-500 opacity-60" />
+                      <p className="text-sm font-semibold">No actionable patches found.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
-
           </div>
         )}
       </main>
-
-      {/* FOOTER */}
-      <footer className="relative z-10 border-t border-white/5 bg-[#0A0A14] rounded-t-[4rem] mt-20 pt-16 pb-8 px-12">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 border-b border-white/5 pb-10 mb-8">
-          <div className="flex items-center gap-3 opacity-60 hover:opacity-100 transition-opacity">
-            <Shield size={24} className="text-primary" />
-            <span className="font-head text-xl font-bold tracking-tight">DepShield</span>
-          </div>
-
-          <div className="flex items-center gap-3 px-4 py-2 rounded-full border border-white/10 bg-surface/50 font-mono text-xs">
-            <span className="w-2 h-2 rounded-full bg-teal-400 shadow-[0_0_8px_#2dd4bf] animate-pulse" />
-            <span className="text-ghost/60 uppercase tracking-widest">System Operational</span>
-          </div>
-        </div>
-      </footer>
 
       <Panel dep={sel} onClose={() => setSel(null)} />
     </>

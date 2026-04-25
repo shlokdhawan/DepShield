@@ -56,31 +56,31 @@ export default function Panel({ dep, onClose }) {
       />
       <aside
         ref={panelRef}
-        className="fixed top-0 right-0 w-full max-w-[500px] h-screen z-[99] bg-surface/95 backdrop-blur-xl border-l border-white/10 overflow-y-auto shadow-[-20px_0_50px_rgba(0,0,0,0.8)]"
+        className="fixed top-0 right-0 w-full max-w-[500px] h-screen z-[99] bg-surface backdrop-blur-3xl border-l border-white/10 overflow-y-auto shadow-[inset_1px_0_1px_rgba(255,255,255,0.1),-20px_0_50px_rgba(0,0,0,0.4)]"
         style={{ scrollbarWidth: "thin" }}
       >
         {/* Top bar */}
-        <div className="sticky top-0 z-10 px-6 py-5 border-b border-white/10 bg-surface/90 backdrop-blur-md flex justify-between items-start">
+        <div className="sticky top-0 z-10 px-6 py-5 border-b border-white/10 bg-surface backdrop-blur-md flex justify-between items-start shadow-sm">
           <div>
             <div className="text-2xl font-bold font-head text-ghost tracking-tight flex items-center gap-3">
               {dep.sev === 'CRITICAL' && <AlertTriangle size={24} color={col} className="animate-pulse" />}
               {dep.name}
             </div>
             {dep.threat_intel && (
-              <div className="mt-2 bg-red-500/20 border border-red-500/30 text-red-400 px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider animate-pulse flex items-center gap-2">
+              <div className="mt-2 bg-red-500/20 border border-red-500/30 text-red-400 px-3 py-1.5 rounded-lg text-sm font-bold uppercase tracking-wider animate-pulse flex items-center gap-2">
                 <ShieldAlert size={14} /> Security Alert: Known Threat Detected
               </div>
             )}
-            <div className="text-[13px] text-ghost/60 mt-1 font-mono flex items-center gap-3">
+            <div className="text-base text-ghost/60 mt-1 font-mono flex items-center gap-3">
               v{dep.version} <ArrowRight size={14} className="text-ghost/40" /> <span className="text-primary font-bold">v{dep.fixv}</span>
             </div>
             <div className="mt-4 flex gap-2 flex-wrap items-center">
               <Chip sev={dep.sev} />
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/5 border border-white/10 text-ghost/70 rounded-full text-xs font-mono">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/5 border border-white/10 text-ghost/70 rounded-full text-sm font-mono">
                 {dep.maint === "Active" ? "🟢" : dep.maint === "Abandoned" ? "🔴" : "🟡"} {dep.maint}
               </span>
               {dep.breakage_risk && (
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 border rounded-full text-xs font-mono font-bold ${dep.breakage_risk === 'HIGH' ? 'bg-red-500/10 border-red-500/30 text-red-500' : dep.breakage_risk === 'MEDIUM' ? 'bg-amber-500/10 border-amber-500/30 text-amber-500' : 'bg-teal-400/10 border-teal-400/30 text-teal-400'}`}>
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 border rounded-full text-sm font-mono font-bold ${dep.breakage_risk === 'HIGH' ? 'bg-red-500/10 border-red-500/30 text-red-500' : dep.breakage_risk === 'MEDIUM' ? 'bg-amber-500/10 border-amber-500/30 text-amber-500' : 'bg-teal-400/10 border-teal-400/30 text-teal-400'}`}>
                   {dep.breakage_risk === 'HIGH' ? '⚠️ High Breakage Risk' : dep.breakage_risk === 'MEDIUM' ? '⚡ Med Breakage Risk' : '✓ Low Breakage Risk'}
                 </span>
               )}
@@ -98,12 +98,12 @@ export default function Panel({ dep, onClose }) {
           {/* CVEs */}
           {dep.cves?.length > 0 && (
             <div className="panel-item mb-8">
-              <p className="text-[11px] font-bold uppercase tracking-widest text-[#ef4444] mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase tracking-widest text-[#ef4444] mb-3 flex items-center gap-2">
                 <ShieldAlert size={14} /> Known Exploits
               </p>
               <div className="flex flex-wrap gap-2">
                 {dep.cves?.map(c => (
-                  <span key={c} className="bg-red-500/10 border border-red-500/30 text-red-500 rounded-md px-3 py-1.5 text-xs font-mono drop-shadow-[0_0_8px_rgba(239,68,68,0.3)]">
+                  <span key={c} className="bg-red-500/10 border border-red-500/30 text-red-500 rounded-md px-3 py-1.5 text-sm font-mono drop-shadow-[0_0_8px_rgba(239,68,68,0.3)]">
                     {c}
                   </span>
                 ))}
@@ -113,10 +113,10 @@ export default function Panel({ dep, onClose }) {
 
           {/* Description */}
           <div className="panel-item mb-8">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+            <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
               <Activity size={14} /> AI Analysis
             </p>
-            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner space-y-4 break-words">
+            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-sm leading-relaxed font-body shadow-inner space-y-4 break-words text-justify">
               {showAllVulns && dep.vuln_details?.length > 1 ? (
                 <>
                   {dep.vuln_details.map((v, i) => {
@@ -130,14 +130,14 @@ export default function Panel({ dep, onClose }) {
                       .trim();
                     return (
                       <div key={i} className="mb-4 last:mb-0 break-words whitespace-pre-wrap">
-                        <strong className="text-primary block mb-1 text-xs font-mono">{v.id}</strong>
+                        <strong className="text-primary block mb-1 text-sm font-mono">{v.id}</strong>
                         {cleanText}
                       </div>
                     );
                   })}
                   <button 
                     onClick={() => setShowAllVulns(false)} 
-                    className="text-primary hover:text-primary/80 font-bold text-[11px] uppercase tracking-wider block mt-4"
+                    className="text-primary hover:text-primary/80 font-bold text-sm uppercase tracking-wider block mt-4"
                   >
                     Show Less
                   </button>
@@ -172,18 +172,18 @@ export default function Panel({ dep, onClose }) {
               <div className="text-3xl font-bold font-head" style={{ color: col, textShadow: `0 0 15px color-mix(in srgb, ${col} 40%, transparent)` }}>
                 {dep.sev}
               </div>
-              <div className="text-ghost/40 text-xs mt-1 tracking-wide uppercase font-bold">CVSS Base Score</div>
-              <div className="text-ghost/60 text-xs mt-2 font-mono flex items-center gap-2">
+              <div className="text-ghost/40 text-sm mt-1 tracking-wide uppercase font-bold">CVSS Base Score</div>
+              <div className="text-ghost/60 text-sm mt-2 font-mono flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-ghost/40" />
                 {dep.vulns} CVE{dep.vulns !== 1 ? "s" : ""} · {dep.updated}
               </div>
               {dep.attack_type && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-[10px] text-ghost/50 uppercase font-bold tracking-tight">
+                  <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-sm text-ghost/50 uppercase font-bold tracking-tight">
                     {dep.attack_type}
                   </span>
                   {dep.urgency && (
-                    <span className="px-2 py-0.5 bg-primary/10 border border-primary/20 rounded text-[10px] text-primary uppercase font-bold tracking-tight">
+                    <span className="px-2 py-0.5 bg-primary/10 border border-primary/20 rounded text-sm text-primary uppercase font-bold tracking-tight">
                       {dep.urgency}
                     </span>
                   )}
@@ -194,10 +194,10 @@ export default function Panel({ dep, onClose }) {
 
           {/* Origin trace */}
           <div className="panel-item mb-8">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+            <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
               <GitBranch size={14} /> Origin Trace
             </p>
-            <div className="flex items-center flex-wrap gap-2 font-mono text-xs">
+            <div className="flex items-center flex-wrap gap-2 font-mono text-sm">
               {dep.origin?.map((part, i) => {
                 const isLast = i === dep.origin.length - 1;
                 return (
@@ -218,10 +218,10 @@ export default function Panel({ dep, onClose }) {
 
           {/* Codebase Context & Smart Advisor */}
           <div className="panel-item mb-8">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+            <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
               <Zap size={14} /> Smart Advisor
             </p>
-            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-[13px] leading-relaxed font-body shadow-inner space-y-4">
+            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-sm leading-relaxed font-body shadow-inner space-y-4 text-justify">
               {dep.reco ? (
                 <div className="whitespace-pre-wrap">
                   {dep.reco}
@@ -233,7 +233,7 @@ export default function Panel({ dep, onClose }) {
               {dep.usage_info && (
                 <div className="pt-3 border-t border-white/5">
                   <strong className="text-white/90 block mb-1">Impact Analysis:</strong>
-                  <span className="text-primary font-mono bg-primary/10 border border-primary/20 px-2 py-1 rounded text-xs">{dep.usage_info}</span>
+                  <span className="text-primary font-mono bg-primary/10 border border-primary/20 px-2 py-1 rounded text-sm">{dep.usage_info}</span>
                 </div>
               )}
             </div>
@@ -242,12 +242,12 @@ export default function Panel({ dep, onClose }) {
           {/* Risk Breakdown */}
           {dep.score_breakdown && (
             <div className="panel-item mb-8">
-              <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
                 <Activity size={14} /> Risk Factor Analysis
               </p>
               <div className="bg-[#0A0A14]/40 border border-white/5 rounded-2xl p-4 space-y-2.5">
                 {Object.entries(dep.score_breakdown).map(([key, val]) => (
-                  <div key={key} className="flex justify-between items-center text-[11px] font-mono">
+                  <div key={key} className="flex justify-between items-center text-sm font-mono">
                     <span className="text-ghost/40 uppercase tracking-tighter">{key.replace(/_/g, " ")}</span>
                     <span className="text-primary font-bold">{typeof val === "number" ? (val > 1 ? `x${val.toFixed(2)}` : val.toFixed(2)) : val}</span>
                   </div>
@@ -259,11 +259,11 @@ export default function Panel({ dep, onClose }) {
           {/* Fix command */}
           {dep.fix && (
             <div className="panel-item mb-8">
-              <p className="text-[11px] font-bold uppercase tracking-widest text-[#2dd4bf] mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase tracking-widest text-[#2dd4bf] mb-3 flex items-center gap-2">
                 <Zap size={14} /> Recommended Fix
               </p>
               <div className="bg-[#0A0A14] border border-[#2dd4bf]/20 rounded-xl p-4 flex justify-between items-center gap-4 shadow-[0_0_15px_rgba(45,212,191,0.05)]">
-                <code className="text-[#2dd4bf] text-[13px] break-all font-mono">{dep.fix}</code>
+                <code className="text-[#2dd4bf] text-base break-all font-mono">{dep.fix}</code>
                 <Copy text={dep.fix} />
               </div>
             </div>
@@ -272,16 +272,16 @@ export default function Panel({ dep, onClose }) {
           {/* Alternatives */}
           {dep.alts?.length > 0 && (
             <div className="panel-item mb-8">
-              <p className="text-[11px] font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
                 <ArrowRight size={14} /> Safe Alternatives
               </p>
               {dep.alts?.map((a, i) => (
                 <div key={i} className="bg-surface/50 border border-white/10 rounded-xl p-4 mb-3">
-                  <div className="text-ghost/90 text-[13px] font-bold mb-3 flex items-center gap-2">
+                  <div className="text-ghost/90 text-base font-bold mb-3 flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-ghost/40" /> {a.name}
                   </div>
                   <div className="bg-[#0A0A14] border border-white/5 rounded-lg px-4 py-3 flex justify-between items-center gap-4">
-                    <code className="text-ghost/60 text-xs break-all font-mono">{a.cmd}</code>
+                    <code className="text-ghost/60 text-sm break-all font-mono">{a.cmd}</code>
                     <Copy text={a.cmd} />
                   </div>
                 </div>
@@ -306,10 +306,10 @@ export default function Panel({ dep, onClose }) {
               {pr && (
                 <div className="mt-4 bg-[#0A0A14] border border-white/10 rounded-2xl overflow-hidden shadow-2xl animate-fade-up">
                   <div className="px-5 py-3 border-b border-white/10 flex justify-between items-center bg-white/[0.02]">
-                    <span className="text-ghost/40 text-xs font-mono">patch.diff</span>
+                    <span className="text-ghost/40 text-sm font-mono">patch.diff</span>
                     <Copy text={diff} />
                   </div>
-                  <pre className="p-5 m-0 text-xs text-ghost/70 overflow-x-auto leading-loose whitespace-pre-wrap font-mono relative">
+                  <pre className="p-5 m-0 text-sm text-ghost/70 overflow-x-auto leading-loose whitespace-pre-wrap font-mono relative">
                     <div className="absolute top-0 left-0 w-1 h-full bg-primary/50 blur-sm" />
                     {diff}
                   </pre>
