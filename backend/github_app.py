@@ -47,6 +47,7 @@ except (ImportError, ValueError):
 # ─── CONFIGURATION ─────────────────────────────────────────────────────────────
 
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+GITHUB_APP_PRIVATE_KEY_PATH=os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH", "./backend/private-key.pem")
 GITHUB_API_URL = "https://api.github.com"
 
 # Files that trigger a dependency scan when changed
@@ -154,9 +155,28 @@ def handle_push_event(payload: dict) -> dict:
         return {"status": "error", "reason": "Missing installation_id"}
 
     token = get_installation_access_token(installation_id)
+    token_source = "App JWT"
+
     if not token:
-        logger.error(f"[webhook] Failed to get installation token for {installation_id}")
-        return {"status": "error", "reason": "Failed to get installation access token"}
+        logger.warning(f"[webhook] Failed to get installation token via App JWT, trying OAuth fallback for {repo_full_name}")
+        # FALLBACK: Try to get the user's OAuth token
+        try:
+            inst = adapter.get_installation_by_id(installation_id)
+            if inst and inst.get("user_id"):
+                user_id = inst.get("user_id")
+                # Look up user to get access_token
+                # Note: adapter.get_user(user_id) might not exist, using supabase directly or assuming get_user exists
+                response = adapter.supabase.table("users").select("access_token").eq("id", user_id).execute()
+                if response.data:
+                    token = response.data[0].get("access_token")
+                    token_source = "OAuth Token"
+                    logger.info(f"[webhook] Using OAuth fallback token for {repo_full_name}")
+        except Exception as e:
+            logger.error(f"[webhook] OAuth fallback failed: {e}")
+
+    if not token:
+        logger.error(f"[webhook] All token sources failed for {repo_full_name}")
+        return {"status": "error", "reason": "Failed to get access token"}
 
     # Fetch the manifest file(s) from the repo
     # Prefer package-lock.json (richer dependency data) over package.json
@@ -253,21 +273,24 @@ def _fetch_file_from_repo(
         Parsed JSON content of the file, or None on failure
     """
     try:
-        # Use raw.githubusercontent.com for direct file content (faster, no base64)
-        owner, repo = repo_full_name.split("/", 1)
-        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filename}"
+        # Use GitHub API for direct file content (handles private repos and tokens correctly)
+        api_url = f"{GITHUB_API_URL}/repos/{repo_full_name}/contents/{filename}?ref={branch}"
 
         response = requests.get(
-            raw_url,
+            api_url,
             headers={
                 "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github.raw+json",
+                "Accept": "application/vnd.github.v3+json",
             },
             timeout=15,
         )
 
         if response.status_code == 200:
-            return response.json()
+            import base64
+            data = response.json()
+            content_base64 = data.get("content", "")
+            content_bytes = base64.b64decode(content_base64)
+            return json.loads(content_bytes.decode("utf-8"))
 
         logger.warning(
             f"[webhook] Failed to fetch {filename} from {repo_full_name}: "
@@ -364,7 +387,8 @@ def handle_installation_event(payload: dict) -> dict:
             ]
             adapter.save_repositories(installation_id, repo_records)
 
-        # TODO: adapter.remove_repositories(installation_id, [r["id"] for r in removed])
+        if removed:
+            adapter.remove_repositories(installation_id, [r["id"] for r in removed])
 
         return {"status": "updated", "added": len(added), "removed": len(removed)}
 
@@ -409,5 +433,8 @@ def handle_installation_repositories_event(payload: dict) -> dict:
             for r in added
         ]
         adapter.save_repositories(installation_id, repo_records)
+
+    if removed:
+        adapter.remove_repositories(installation_id, [r["id"] for r in removed])
 
     return {"status": "updated", "added": len(added), "removed": len(removed)}

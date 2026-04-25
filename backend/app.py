@@ -384,6 +384,10 @@ def github_oauth_callback():
         "access_token": access_token,
     })
 
+    if "error" in user_data:
+        print(f"[DepShield] Error saving user during OAuth: {user_data['error']}")
+        return jsonify({"error": "Failed to save user to database. Have you created the tables in Supabase?"}), 500
+
     # Create a JWT for the frontend session
     token = create_jwt(user_data)
 
@@ -428,43 +432,69 @@ def list_repos():
     their latest scan status (grade, last scan time).
     """
     user_id = request.user.get("sub")
+    print(f"[DepShield] list_repos called for user_id={user_id}")
     repos = adapter.get_user_repositories(user_id)
 
-    # 5. Repository fallback: If installation exists but no repos, fetch live
-    if not repos:
-        inst = adapter.get_user_installation(user_id)
-        if inst and inst.get("installation_id"):
-            installation_id = inst.get("installation_id")
-            token = get_installation_access_token(installation_id)
-            if token:
-                import requests
-                resp = requests.get(
-                    "https://api.github.com/installation/repositories",
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Accept": "application/vnd.github.v3+json"
-                    }
-                )
-                if resp.ok:
-                    repos_data = resp.json().get("repositories", [])
-                    saved_repos = []
-                    for r in repos_data:
-                        saved_repos.append({
-                            "github_repo_id": r["id"],
-                            "full_name": r["full_name"],
-                            "default_branch": r["default_branch"],
-                            "private": r["private"]
-                        })
-                    adapter.save_repositories(installation_id, saved_repos)
-                    repos = adapter.get_user_repositories(user_id)
+    # 5. Sync repositories with GitHub App installation (source of truth)
+    inst = adapter.get_user_installation(user_id)
+    if inst and inst.get("installation_id"):
+        installation_id = inst.get("installation_id")
+        print(f"[DepShield] Syncing repositories for installation_id={installation_id}")
+        
+        token = get_installation_access_token(installation_id)
+        if token:
+            import requests
+            resp = requests.get(
+                "https://api.github.com/installation/repositories",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github.v3+json"
+                }
+            )
+            if resp.ok:
+                repos_data = resp.json().get("repositories", [])
+                print(f"[DepShield] GitHub App returned {len(repos_data)} repositories for installation={installation_id}")
+                
+                # Sync logic: upsert current, remove those no longer in the list
+                current_github_ids = [r["id"] for r in repos_data]
+                
+                # 1. Save/Update current repos
+                repo_records = []
+                for r in repos_data:
+                    repo_records.append({
+                        "github_repo_id": r["id"],
+                        "full_name": r["full_name"],
+                        "default_branch": r.get("default_branch", "main"),
+                        "private": r.get("private", False)
+                    })
+                saved = adapter.save_repositories(installation_id, repo_records, user_id=user_id)
+                print(f"[DepShield] Saved {len(saved)} repositories to database")
+                
+                # 2. Cleanup: remove repos in DB for this installation not in current_github_ids
+                all_db_repos = adapter.get_user_repositories(user_id)
+                # Filter to only those belonging to this installation
+                inst_db_repos = [r for r in all_db_repos if r.get("installation_id") == installation_id]
+                to_remove = [r["github_repo_id"] for r in inst_db_repos if r["github_repo_id"] not in current_github_ids]
+                
+                if to_remove:
+                    adapter.remove_repositories(installation_id, to_remove)
+                    print(f"[DepShield] Removed {len(to_remove)} orphaned repositories from database")
+            else:
+                print(f"[DepShield] Failed to fetch repositories from GitHub App: {resp.status_code}")
+        else:
+            print(f"[DepShield] Failed to generate installation token for {installation_id}")
+
+    # Final list from DB (synced above)
+    repos = adapter.get_user_repositories(user_id)
 
     # Enrich with latest scan data
     enriched = []
     for repo in repos:
         full_name = repo.get("full_name", "")
+        # Use get_scan_results helper for consistency
         scans = adapter.get_scan_results(full_name, limit=1)
         latest_scan = scans[0] if scans else None
-
+        
         enriched.append({
             "full_name": full_name,
             "private": repo.get("private", False),
@@ -480,6 +510,7 @@ def list_repos():
             } if latest_scan else None,
         })
 
+    print(f"[DepShield] Final dashboard repos count: {len(enriched)}")
     return jsonify(enriched)
 
 
@@ -503,6 +534,133 @@ def get_scan_history(repo_full_name):
     return jsonify(scans)
 
 
+@app.route("/api/dashboard/scan/<path:repo_full_name>", methods=["POST"])
+@require_auth
+def trigger_scan(repo_full_name):
+    """
+    On-demand scan: fetch the repo's package.json/package-lock.json
+    via the user's OAuth token, run the analyzer, and save results.
+    """
+    import time as _time
+    from datetime import datetime, timezone
+
+    t_start = _time.time()
+    user_id = request.user.get("sub")
+    github_id = request.user.get("github_id")
+    print(f"[DepShield] On-demand scan triggered for {repo_full_name} by user_id={user_id}")
+
+    # Get user's OAuth token from Supabase
+    user_record = adapter.get_user_by_github_id(github_id) if github_id else None
+    oauth_token = user_record.get("access_token") if user_record else None
+
+    if not oauth_token:
+        return jsonify({"error": "No GitHub access token found. Please re-login."}), 401
+
+    # Try to fetch package-lock.json first, then package.json
+    manifest_filename = None
+    manifest_content = None
+
+    for filename in ["package-lock.json", "package.json"]:
+        try:
+            parts = repo_full_name.split("/", 1)
+            if len(parts) != 2:
+                continue
+            owner, repo = parts
+            # Get default branch
+            repo_resp = requests.get(
+                f"https://api.github.com/repos/{repo_full_name}",
+                headers={
+                    "Authorization": f"Bearer {oauth_token}",
+                    "Accept": "application/vnd.github.v3+json"
+                },
+                timeout=10
+            )
+            default_branch = "main"
+            if repo_resp.ok:
+                default_branch = repo_resp.json().get("default_branch", "main")
+
+            # Use GitHub API to fetch file content (handles private repos correctly)
+            api_url = f"https://api.github.com/repos/{repo_full_name}/contents/{filename}?ref={default_branch}"
+            resp = requests.get(
+                api_url,
+                headers={
+                    "Authorization": f"Bearer {oauth_token}",
+                    "Accept": "application/vnd.github.v3+json"
+                },
+                timeout=15
+            )
+            if resp.status_code == 200:
+                import base64
+                data = resp.json()
+                content_base64 = data.get("content", "")
+                content_bytes = base64.b64decode(content_base64)
+                manifest_content = json.loads(content_bytes.decode("utf-8"))
+                manifest_filename = filename
+                print(f"[DepShield] Fetched {filename} from {repo_full_name} via API")
+                break
+        except Exception as e:
+            print(f"[DepShield] Error fetching {filename}: {e}")
+            continue
+
+    if not manifest_content:
+        return jsonify({"error": f"Could not find package.json or package-lock.json in {repo_full_name}"}), 404
+
+    # Run the EXISTING analyzer pipeline — same as /api/scan and webhooks
+    try:
+        results = analyze_manifest(manifest_filename, manifest_content, usage_map=None)
+
+        # Calculate summary metrics (same formula as github_app.py)
+        total = len(results)
+        critical = sum(1 for d in results if d.get("sev") == "CRITICAL")
+        high = sum(1 for d in results if d.get("sev") == "HIGH")
+        medium = sum(1 for d in results if d.get("sev") == "MEDIUM")
+        low = sum(1 for d in results if d.get("sev") == "LOW")
+        safe_count = total - critical - high - medium - low
+
+        health_score = (safe_count * 100 + low * 50 + medium * 15 + high * 5) / max(total, 1)
+        sev_penalty = min(50, critical * 15 + high * 5)
+        risk = max(0, min(100, round(health_score - sev_penalty)))
+        grade = "A" if risk >= 90 else "B" if risk >= 75 else "C" if risk >= 55 else "D" if risk >= 35 else "F"
+
+        scan_data = {
+            "grade": grade,
+            "risk_score": risk,
+            "total_deps": total,
+            "critical": critical,
+            "high": high,
+            "medium": medium,
+            "low": low,
+            "results": results,
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+            "trigger": "manual",
+            "manifest": manifest_filename,
+        }
+
+        # Save to Supabase
+        adapter.save_scan_result(repo_full_name, scan_data, triggered_by="manual")
+
+        elapsed = _time.time() - t_start
+        print(f"[DepShield] On-demand scan complete for {repo_full_name}: grade={grade}, deps={total}, time={elapsed:.2f}s")
+
+        return jsonify({
+            "success": True,
+            "repo": repo_full_name,
+            "grade": grade,
+            "risk_score": risk,
+            "total_deps": total,
+            "critical": critical,
+            "high": high,
+            "medium": medium,
+            "low": low,
+            "scanned_at": scan_data["scanned_at"],
+            "results": results,
+        })
+
+    except Exception as e:
+        print(f"[DepShield] Scan failed for {repo_full_name}: {e}")
+        return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
+
+
 # ─── GITHUB APP WEBHOOK ──────────────────────────────────────────────────────
 
 @app.route("/api/github/store-installation", methods=["POST"])
@@ -514,20 +672,26 @@ def store_installation():
         return jsonify({"error": "missing installation_id"}), 400
 
     user_id = request.user.get("sub")
+    github_id = request.user.get("github_id")
     print(f"[DepShield] store-installation called")
     print(f"[DepShield] installation_id received: {installation_id}")
+    print(f"[DepShield] user_id resolved: {user_id}")
 
     adapter.save_installation(user_id, {
         "installation_id": int(installation_id),
         "account_login": request.user.get("login", "unknown"),
         "account_type": "User"
     })
-    print("[DepShield] installation saved")
+    print("[DepShield] installation saved to Supabase")
 
+    # Strategy 1: Try GitHub App installation token (requires private-key.pem)
     token = get_installation_access_token(int(installation_id))
+    repos_fetched = False
+
     if token:
-        import requests
-        resp = requests.get(
+        print(f"[DepShield] installation token generated via App JWT for installation={installation_id}")
+        import requests as req
+        resp = req.get(
             "https://api.github.com/installation/repositories",
             headers={
                 "Authorization": f"Bearer {token}",
@@ -536,18 +700,23 @@ def store_installation():
         )
         if resp.ok:
             repos_data = resp.json().get("repositories", [])
+            print(f"[DepShield] GitHub App returned {len(repos_data)} repositories for installation={installation_id}")
+            
             saved_repos = []
             for r in repos_data:
                 saved_repos.append({
                     "github_repo_id": r["id"],
                     "full_name": r["full_name"],
-                    "default_branch": r["default_branch"],
-                    "private": r["private"]
+                    "default_branch": r.get("default_branch", "main"),
+                    "private": r.get("private", False)
                 })
-            adapter.save_repositories(int(installation_id), saved_repos)
-            print(f"[DepShield] repos fetched count: {len(saved_repos)}")
+            saved = adapter.save_repositories(int(installation_id), saved_repos, user_id=user_id)
+            print(f"[DepShield] Saved {len(saved)} repositories to database")
+            repos_fetched = True
+    else:
+        print(f"[DepShield] ERROR: Failed to generate installation token for {installation_id}. Webhooks will fail.")
 
-    return jsonify({"success": True})
+    return jsonify({"success": repos_fetched})
 
 
 @app.route("/api/github/webhook", methods=["POST"])

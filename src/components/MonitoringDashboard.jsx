@@ -47,6 +47,7 @@ export default function MonitoringDashboard({ onViewScanResults }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [scanningRepos, setScanningRepos] = useState(new Set());
 
   /**
    * Fetch the user's connected repositories from the backend.
@@ -59,6 +60,7 @@ export default function MonitoringDashboard({ onViewScanResults }) {
       });
       if (res.ok) {
         const data = await res.json();
+        console.log(`dashboard repos response: ${data.length} repos`);
         setRepos(data);
         setError('');
       } else {
@@ -78,8 +80,8 @@ export default function MonitoringDashboard({ onViewScanResults }) {
     const installationId = params.get('installation_id');
     const setupAction = params.get('setup_action');
 
-    if (installationId && setupAction === 'install') {
-      console.log('installation_id detected in URL');
+    if (installationId && (setupAction === 'install' || setupAction === 'update')) {
+      console.log('installation_id found in URL');
       console.log('calling store-installation');
       
       // Clean URL so a refresh doesn't trigger this again
@@ -94,8 +96,8 @@ export default function MonitoringDashboard({ onViewScanResults }) {
         body: JSON.stringify({ installation_id: installationId })
       })
       .then(res => {
+        console.log(`store-installation response: ${res.status}`);
         if (res.ok) {
-          console.log('store-installation success');
           fetchRepos();
         } else {
           console.error('store-installation failed');
@@ -109,6 +111,14 @@ export default function MonitoringDashboard({ onViewScanResults }) {
     } else {
       fetchRepos();
     }
+
+    // Set up auto-polling every 10 seconds
+    const interval = setInterval(() => {
+      console.log('[DepShield] Auto-polling for repo updates...');
+      fetchRepos();
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, [token, fetchRepos]);
 
   const handleRefresh = () => {
@@ -130,7 +140,11 @@ export default function MonitoringDashboard({ onViewScanResults }) {
    * Load a repo's full scan results for display in the existing dashboard views.
    */
   const handleViewRepo = async (repo) => {
-    if (!repo.latest_scan) return;
+    if (!repo.latest_scan) {
+      // If no scan exists, trigger one first
+      handleTriggerScan(repo.full_name);
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/api/dashboard/scan-history/${repo.full_name}?full=true`, {
         headers: { 'Authorization': `Bearer ${token}` },
@@ -145,6 +159,42 @@ export default function MonitoringDashboard({ onViewScanResults }) {
       }
     } catch (err) {
       console.error('Failed to fetch scan results:', err);
+    }
+  };
+
+  /**
+   * Manually trigger a scan for a specific repository.
+   */
+  const handleTriggerScan = async (repoFullName) => {
+    if (scanningRepos.has(repoFullName)) return;
+
+    setScanningRepos(prev => new Set(prev).add(repoFullName));
+    try {
+      const res = await fetch(`${API_BASE}/api/dashboard/scan/${repoFullName}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[DepShield] On-demand scan complete for ${repoFullName}`);
+        // Refresh the list to show the new grade
+        fetchRepos();
+        // If we have results, we can even jump straight to them
+        if (data.results) {
+          onViewScanResults?.(data.results, repoFullName);
+        }
+      } else {
+        const errorData = await res.json();
+        alert(`Scan failed: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Scan error:', err);
+    } finally {
+      setScanningRepos(prev => {
+        const next = new Set(prev);
+        next.delete(repoFullName);
+        return next;
+      });
     }
   };
 
@@ -291,31 +341,52 @@ export default function MonitoringDashboard({ onViewScanResults }) {
                     )}
                   </div>
 
-                  {/* Grade badge */}
-                  <div className="flex items-center gap-4">
-                    {scan ? (
-                      <div
-                        className="w-14 h-14 rounded-2xl flex items-center justify-center font-drama text-3xl italic font-bold transition-all duration-300 group-hover:scale-110 border"
-                        style={{
-                          color: gradeColor,
-                          borderColor: `${gradeColor}40`,
-                          backgroundColor: `${gradeColor}10`,
-                          textShadow: `0 0 20px ${gradeColor}60`,
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-4">
+                      {/* Scan Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleTriggerScan(repo.full_name);
                         }}
+                        disabled={scanningRepos.has(repo.full_name)}
+                        className={`p-2 rounded-xl border transition-all duration-300 ${
+                          scanningRepos.has(repo.full_name)
+                            ? 'bg-primary/5 border-primary/20 text-primary animate-pulse'
+                            : 'bg-white/5 border-white/10 text-ghost/40 hover:bg-primary/10 hover:border-primary/30 hover:text-primary'
+                        }`}
+                        title="Trigger Manual Scan"
                       >
-                        {scan.grade}
-                      </div>
-                    ) : (
-                      <div className="w-14 h-14 rounded-2xl flex items-center justify-center border border-white/10 bg-white/[0.02]">
-                        <Shield size={20} className="text-ghost/20" />
-                      </div>
-                    )}
+                        {scanningRepos.has(repo.full_name) ? (
+                          <RefreshCw size={16} className="animate-spin" />
+                        ) : (
+                          <Zap size={16} />
+                        )}
+                      </button>
 
-                    <ExternalLink
-                      size={16}
-                      className="text-ghost/20 group-hover:text-ghost/50 transition-colors"
-                    />
-                  </div>
+                      {scan ? (
+                        <div
+                          className="w-14 h-14 rounded-2xl flex items-center justify-center font-drama text-3xl italic font-bold transition-all duration-300 group-hover:scale-110 border"
+                          style={{
+                            color: gradeColor,
+                            borderColor: `${gradeColor}40`,
+                            backgroundColor: `${gradeColor}10`,
+                            textShadow: `0 0 20px ${gradeColor}60`,
+                          }}
+                        >
+                          {scan.grade}
+                        </div>
+                      ) : (
+                        <div className="w-14 h-14 rounded-2xl flex items-center justify-center border border-white/10 bg-white/[0.02]">
+                          <Shield size={20} className="text-ghost/20" />
+                        </div>
+                      )}
+
+                      <ExternalLink
+                        size={16}
+                        className="text-ghost/20 group-hover:text-ghost/50 transition-colors"
+                      />
+                    </div>
                 </div>
               </div>
             );
