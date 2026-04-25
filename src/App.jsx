@@ -7,13 +7,25 @@ import Graph from "./components/Graph";
 import Panel from "./components/Panel";
 import {
   Shield, ShieldAlert, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
-  Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download
+  Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download,
+  Monitor
 } from "lucide-react";
+
+// ─── NEW: GitHub Auth Integration ────────────────────────────────────────────
+import { useAuth } from "./contexts/AuthContext";
+import GitHubLoginButton from "./components/GitHubLoginButton";
+import UserMenu from "./components/UserMenu";
+import MonitoringDashboard from "./components/MonitoringDashboard";
+import { API_BASE } from "./config/api";
+// ─────────────────────────────────────────────────────────────────────────────
 
 gsap.registerPlugin(ScrollTrigger);
 
 export default function App() {
-  const [phase, setPhase] = useState("input"); // input | pipeline | main
+  const [phase, setPhase] = useState("input"); // input | pipeline | main | monitoring
+
+  // ─── NEW: Auth state from context ──────────────────────────────────────────
+  const { user, isAuthenticated, login: authLogin, loading: authLoading } = useAuth();
   const [tab, setTab] = useState("dashboard");
   const [inputTab, setInputTab] = useState("url"); // url | file
   const [step, setStep] = useState(-1);
@@ -55,6 +67,22 @@ export default function App() {
     };
   }, []);
 
+  // ─── NEW: Detect OAuth callback token in URL ──────────────────────────────
+  // After GitHub OAuth, the backend redirects here with ?auth_token=<jwt>
+  // We extract it, store it via AuthContext, and clean the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("auth_token");
+    if (token) {
+      authLogin(token).then(() => {
+        // Clean the URL so the token isn't visible/bookmarkable
+        window.history.replaceState({}, "", window.location.pathname);
+        setPhase("monitoring");
+      });
+    }
+  }, [authLogin]);
+  // ──────────────────────────────────────────────────────────────────────────
+
   const TABS = [
     { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={14} /> },
     { id: "graph", label: "Dependency Graph", icon: <Network size={14} /> },
@@ -62,7 +90,7 @@ export default function App() {
     { id: "fixes", label: "Fix Plan", icon: <Workflow size={14} /> },
   ];
 
-  const API = "";
+  const API = API_BASE;
 
   const runPipeline = async (backendPromise) => {
     setPhase("pipeline"); setStep(-1); setDone([]);
@@ -232,6 +260,16 @@ export default function App() {
               </span>
             </div>
           )}
+
+          {/* ─── NEW: User menu (when authenticated) ─── */}
+          {isAuthenticated && (
+            <UserMenu
+              onNavigateMonitoring={() => {
+                setPhase("monitoring");
+                setTab("dashboard");
+              }}
+            />
+          )}
         </div>
       </header>
 
@@ -293,6 +331,9 @@ export default function App() {
                 </label>
               )}
             </div>
+
+            {/* ─── NEW: GitHub Login CTA ─── */}
+            <GitHubLoginButton />
           </div>
         )}
 
@@ -595,6 +636,20 @@ export default function App() {
             )}
 
           </div>
+        )}
+
+        {/* ─── NEW: MONITORING DASHBOARD (authenticated users) ─── */}
+        {phase === "monitoring" && (
+          <MonitoringDashboard
+            onViewScanResults={(results, repoName) => {
+              // Load webhook scan results into the existing dashboard views
+              // This reuses the exact same Dashboard/Graph/Vulns/Fixes rendering
+              setScanResult(results);
+              setUrl(repoName);
+              setPhase("main");
+              setTab("dashboard");
+            }}
+          />
         )}
       </main>
 

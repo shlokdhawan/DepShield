@@ -1,10 +1,18 @@
 """
 DepShield Backend — Flask API server.
 
-Endpoints:
+Existing Endpoints (UNCHANGED):
   POST /api/scan       — Clone a GitHub repo and analyze its dependencies
   POST /api/scan-file  — Analyze an uploaded package.json / package-lock.json
   GET  /api/health     — Health check
+
+New Endpoints (GitHub Integration):
+  GET  /api/auth/github          — Redirect to GitHub OAuth
+  GET  /api/auth/github/callback — Exchange code → JWT → redirect to frontend
+  GET  /api/auth/me              — Return current user from JWT
+  GET  /api/dashboard/repos      — List user's connected repos
+  GET  /api/dashboard/scan-history/<repo> — Get scan history for a repo
+  POST /api/github/webhook       — Handle GitHub App webhook events
 """
 
 import os
@@ -31,6 +39,31 @@ try:
     from .analyzer import analyze_manifest
 except (ImportError, ValueError):
     from analyzer import analyze_manifest
+
+# ─── NEW: GitHub OAuth + App imports ──────────────────────────────────────────
+try:
+    from .auth import (
+        get_github_oauth_url, exchange_code_for_token,
+        fetch_github_user, create_jwt, require_auth,
+        get_installation_access_token,
+    )
+    from .github_app import (
+        verify_webhook_signature, handle_push_event,
+        handle_installation_event, handle_installation_repositories_event,
+    )
+    from . import db_adapter as adapter
+except (ImportError, ValueError):
+    from auth import (
+        get_github_oauth_url, exchange_code_for_token,
+        fetch_github_user, create_jwt, require_auth,
+        get_installation_access_token,
+    )
+    from github_app import (
+        verify_webhook_signature, handle_push_event,
+        handle_installation_event, handle_installation_repositories_event,
+    )
+    import db_adapter as adapter
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__, static_folder="../dist", static_url_path="/")
 CORS(app)
@@ -280,6 +313,291 @@ def scan_file():
         return jsonify({"error": str(e)}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW ROUTES — GitHub OAuth + App Integration
+# All existing routes above are UNCHANGED.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ─── GITHUB OAUTH ─────────────────────────────────────────────────────────────
+
+@app.route("/api/auth/github", methods=["GET"])
+def github_oauth_redirect():
+    """
+    Step 1 of OAuth: Redirect the user to GitHub's authorization page.
+
+    The user clicks "Sign in with GitHub" → the browser hits this endpoint
+    → we redirect them to github.com/login/oauth/authorize with our client_id.
+
+    After the user approves, GitHub redirects them to /api/auth/github/callback.
+    """
+    # Build the callback URL dynamically based on the request origin
+    # In dev: http://localhost:5173/api/auth/github/callback (proxied by Vite)
+    # In prod: https://your-app.onrender.com/api/auth/github/callback
+    callback_url = request.host_url.rstrip("/") + "/api/auth/github/callback"
+
+    # State parameter for CSRF protection
+    import secrets
+    state = secrets.token_urlsafe(16)
+
+    try:
+        auth_url = get_github_oauth_url(redirect_uri=callback_url, state=state)
+        return jsonify({"url": auth_url, "state": state})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/auth/github/callback", methods=["GET"])
+def github_oauth_callback():
+    """
+    Step 2 of OAuth: Handle the callback from GitHub.
+
+    GitHub redirects here with ?code=XXX&state=YYY after the user approves.
+    We:
+      1. Exchange the code for an access_token
+      2. Fetch the user's GitHub profile
+      3. Save/update the user via adapter
+      4. Create a JWT session token
+      5. Redirect to the frontend with the token in the URL fragment
+    """
+    code = request.args.get("code")
+    if not code:
+        return jsonify({"error": "Missing authorization code"}), 400
+
+    # Exchange the temporary code for a GitHub access token
+    access_token = exchange_code_for_token(code)
+    if not access_token:
+        return jsonify({"error": "Failed to exchange code for token"}), 401
+
+    # Fetch the user's GitHub profile
+    github_user = fetch_github_user(access_token)
+    if not github_user:
+        return jsonify({"error": "Failed to fetch GitHub user profile"}), 401
+
+    # Save the user via adapter (teammate replaces with Supabase)
+    user_data = adapter.save_user({
+        "github_id": github_user["github_id"],
+        "login": github_user["login"],
+        "avatar_url": github_user["avatar_url"],
+        "name": github_user.get("name", github_user["login"]),
+        "email": github_user.get("email", ""),
+        "access_token": access_token,
+    })
+
+    # Create a JWT for the frontend session
+    token = create_jwt(user_data)
+
+    # Redirect to the frontend with the token
+    # The frontend reads the token from the URL and stores it in localStorage
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+    # In dev mode, frontend is on a different port (5173)
+    redirect_url = f"{frontend_url}/?auth_token={token}"
+
+    from flask import redirect as flask_redirect
+    return flask_redirect(redirect_url)
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@require_auth
+def get_current_user():
+    """
+    Return the current authenticated user's info from the JWT.
+
+    Protected route — requires Authorization: Bearer <token> header.
+    The @require_auth decorator validates the JWT and sets request.user.
+    """
+    user = request.user
+    return jsonify({
+        "id": user.get("sub"),
+        "github_id": user.get("github_id"),
+        "login": user.get("login"),
+        "avatar_url": user.get("avatar_url"),
+        "name": user.get("name", user.get("login")),
+    })
+
+
+# ─── MONITORING DASHBOARD ────────────────────────────────────────────────────
+
+@app.route("/api/dashboard/repos", methods=["GET"])
+@require_auth
+def list_repos():
+    """
+    List the authenticated user's connected repositories.
+
+    Returns repos from the GitHub App installation, along with
+    their latest scan status (grade, last scan time).
+    """
+    user_id = request.user.get("sub")
+    repos = adapter.get_user_repositories(user_id)
+
+    # 5. Repository fallback: If installation exists but no repos, fetch live
+    if not repos:
+        inst = adapter.get_user_installation(user_id)
+        if inst and inst.get("installation_id"):
+            installation_id = inst.get("installation_id")
+            token = get_installation_access_token(installation_id)
+            if token:
+                import requests
+                resp = requests.get(
+                    "https://api.github.com/installation/repositories",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github.v3+json"
+                    }
+                )
+                if resp.ok:
+                    repos_data = resp.json().get("repositories", [])
+                    saved_repos = []
+                    for r in repos_data:
+                        saved_repos.append({
+                            "github_repo_id": r["id"],
+                            "full_name": r["full_name"],
+                            "default_branch": r["default_branch"],
+                            "private": r["private"]
+                        })
+                    adapter.save_repositories(installation_id, saved_repos)
+                    repos = adapter.get_user_repositories(user_id)
+
+    # Enrich with latest scan data
+    enriched = []
+    for repo in repos:
+        full_name = repo.get("full_name", "")
+        scans = adapter.get_scan_results(full_name, limit=1)
+        latest_scan = scans[0] if scans else None
+
+        enriched.append({
+            "full_name": full_name,
+            "private": repo.get("private", False),
+            "last_scan_at": repo.get("last_scan_at"),
+            "last_scan_grade": repo.get("last_scan_grade"),
+            "latest_scan": {
+                "grade": latest_scan["grade"],
+                "risk_score": latest_scan["risk_score"],
+                "total_deps": latest_scan["total_deps"],
+                "critical": latest_scan["critical"],
+                "high": latest_scan["high"],
+                "scanned_at": latest_scan["scanned_at"],
+            } if latest_scan else None,
+        })
+
+    return jsonify(enriched)
+
+
+@app.route("/api/dashboard/scan-history/<path:repo_full_name>", methods=["GET"])
+@require_auth
+def get_scan_history(repo_full_name):
+    """
+    Get scan history and latest full results for a specific repository.
+
+    URL param: repo_full_name — e.g. "owner/repo"
+    Query param: ?full=true — include full scan results (large payload)
+    """
+    include_full = request.args.get("full", "false").lower() == "true"
+    scans = adapter.get_scan_results(repo_full_name, limit=20)
+
+    if not include_full:
+        # Strip the large 'results' array for the summary view
+        for scan in scans:
+            scan.pop("results", None)
+
+    return jsonify(scans)
+
+
+# ─── GITHUB APP WEBHOOK ──────────────────────────────────────────────────────
+
+@app.route("/api/github/store-installation", methods=["POST"])
+@require_auth
+def store_installation():
+    data = request.json
+    installation_id = data.get("installation_id")
+    if not installation_id:
+        return jsonify({"error": "missing installation_id"}), 400
+
+    user_id = request.user.get("sub")
+    print(f"[DepShield] store-installation called")
+    print(f"[DepShield] installation_id received: {installation_id}")
+
+    adapter.save_installation(user_id, {
+        "installation_id": int(installation_id),
+        "account_login": request.user.get("login", "unknown"),
+        "account_type": "User"
+    })
+    print("[DepShield] installation saved")
+
+    token = get_installation_access_token(int(installation_id))
+    if token:
+        import requests
+        resp = requests.get(
+            "https://api.github.com/installation/repositories",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+        )
+        if resp.ok:
+            repos_data = resp.json().get("repositories", [])
+            saved_repos = []
+            for r in repos_data:
+                saved_repos.append({
+                    "github_repo_id": r["id"],
+                    "full_name": r["full_name"],
+                    "default_branch": r["default_branch"],
+                    "private": r["private"]
+                })
+            adapter.save_repositories(int(installation_id), saved_repos)
+            print(f"[DepShield] repos fetched count: {len(saved_repos)}")
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/github/webhook", methods=["POST"])
+def github_webhook():
+    """
+    Receive and process GitHub App webhook events.
+
+    GitHub sends POST requests here for events like:
+      - "push" — code was pushed to a repo
+      - "installation" — App was installed/uninstalled
+      - "installation_repositories" — repo selection changed
+
+    The payload is verified using HMAC-SHA256 signature before processing.
+    """
+    # Verify webhook signature for security
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not verify_webhook_signature(request.data, signature):
+        return jsonify({"error": "Invalid webhook signature"}), 403
+
+    event_type = request.headers.get("X-GitHub-Event", "")
+    delivery_id = request.headers.get("X-GitHub-Delivery", "")
+    payload = request.get_json(force=True)
+
+    # Log the webhook event via adapter
+    adapter.save_webhook_event({
+        "event_type": event_type,
+        "delivery_id": delivery_id,
+        "repository": payload.get("repository", {}).get("full_name", ""),
+        "action": payload.get("action", ""),
+        "received_at": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat(),
+    })
+
+    # Route to the appropriate handler
+    if event_type == "push":
+        result = handle_push_event(payload)
+    elif event_type == "installation":
+        result = handle_installation_event(payload)
+    elif event_type == "installation_repositories":
+        result = handle_installation_repositories_event(payload)
+    elif event_type == "ping":
+        # GitHub sends a ping when the webhook is first configured
+        result = {"status": "pong"}
+    else:
+        result = {"status": "ignored", "event": event_type}
+
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     # Start background threat intel job
     scheduler = BackgroundScheduler()
@@ -294,4 +612,5 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 5000))
     print(f"[DepShield] Backend running at http://localhost:{port}")
+    print(f"[DepShield] Frontend redirect URL: {os.environ.get('FRONTEND_URL', 'http://localhost:5173')}")
     app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
