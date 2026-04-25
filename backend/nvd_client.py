@@ -24,8 +24,11 @@ except (ImportError, ValueError):
     from vuln_classifier import classify_vulnerability
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
-NVD_API_KEY = os.environ.get("NVD_API_KEY", "")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+def get_nvd_key():
+    return os.environ.get("NVD_API_KEY", "")
+
+def get_gh_token():
+    return os.environ.get("GITHUB_TOKEN", "")
 NVD_BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 GHSA_API_URL = "https://api.github.com/advisories"
 
@@ -34,13 +37,13 @@ ENRICHMENT_CACHE = {}
 _cache_lock = threading.Lock()
 
 # NVD rate-limit: 50 req/s with key, 5 req/s without
-_nvd_rate_limit = 50 if NVD_API_KEY else 5
+_nvd_rate_limit = 50 if get_nvd_key() else 5
 _nvd_semaphore = threading.Semaphore(_nvd_rate_limit)
 _nvd_last_request = 0.0
 _nvd_time_lock = threading.Lock()
 
 # GitHub rate-limit: 60 req/min unauthenticated, 5000/hr with token
-_gh_rate_limit = 10 if GITHUB_TOKEN else 5
+_gh_rate_limit = 10 if get_gh_token() else 5
 _gh_semaphore = threading.Semaphore(_gh_rate_limit)
 _gh_last_request = 0.0
 _gh_time_lock = threading.Lock()
@@ -100,8 +103,9 @@ def query_ghsa(ghsa_id: str) -> dict:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    token = get_gh_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     try:
         r = requests.get(
@@ -258,8 +262,9 @@ def query_nvd(cve_id: str) -> dict:
     _nvd_rate_wait()
 
     headers = {}
-    if NVD_API_KEY:
-        headers["apiKey"] = NVD_API_KEY
+    key = get_nvd_key()
+    if key:
+        headers["apiKey"] = key
 
     try:
         r = requests.get(

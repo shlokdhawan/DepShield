@@ -1,6 +1,7 @@
 import os, requests, hashlib
 
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+def get_hf_token():
+    return os.environ.get("HF_TOKEN", "")
 SUMM_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
 
 SUMM_CACHE = {}   # { hash(desc): plain_english }
@@ -55,7 +56,8 @@ def plain_english_summary(
     clean_raw = clean_markdown(raw_description)
     fallback = clean_raw
 
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    token = get_hf_token()
+    headers = {"Authorization": f"Bearer {token}"}
     for _ in range(2):
         try:
             r = requests.post(SUMM_URL, headers=headers, json={
@@ -85,7 +87,8 @@ def batch_summarize(vulns: list[dict], package: str) -> list[dict]:
     """
     for v in vulns:
         severity = v.get("severity", "LOW")
-        if severity in ("CRITICAL", "HIGH") and v.get("summary"):
+        # Summarize any non-low vulnerability with a description
+        if severity in ("CRITICAL", "HIGH", "MEDIUM") and v.get("summary"):
             # Note: The field name in analyzer.py result is "summary" not "desc" at this point
             v["plain_desc"] = plain_english_summary(
                 cve_id=v.get("id", ""),

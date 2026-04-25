@@ -6,8 +6,14 @@ import requests
 from pinecone import Pinecone
 from groq import Groq
 
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# Cache for threat evaluations during a single scan session
+THREAT_EVAL_CACHE = {}
+
+def get_hf_token():
+    return os.environ.get("HF_TOKEN", "")
+
+def get_groq_key():
+    return os.environ.get("GROQ_API_KEY", "")
 
 # Using a free, high-speed embedding model from Hugging Face
 EMBED_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
@@ -29,10 +35,11 @@ def embed(text: str) -> list[float]:
     Generate 384-dimension embeddings via Hugging Face Inference API.
     Model: sentence-transformers/all-MiniLM-L6-v2 (Free)
     """
-    if not HF_TOKEN:
+    token = get_hf_token()
+    if not token:
         return []
 
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    headers = {"Authorization": f"Bearer {token}"}
     payload = {"inputs": text[:1000]} # Truncate for efficiency
 
     for _ in range(3):
@@ -102,10 +109,11 @@ def generate_remediation(
     """
     Uses Groq (Llama 3.1) for fast, free remediation advice.
     """
-    if not GROQ_API_KEY:
+    key = get_groq_key()
+    if not key:
         return "Remediation advice unavailable (GROQ_API_KEY missing)."
 
-    client = Groq(api_key=GROQ_API_KEY)
+    client = Groq(api_key=key)
     
     similar_text = "\n".join([
         f"- {c.get('cve_id')} ({c.get('package')}, CVSS {c.get('cvss_score')}): {c.get('description')[:200]}"
@@ -198,10 +206,14 @@ def evaluate_threat_with_llm(package: str, threat_records: list[dict]) -> dict:
     Uses Groq to determine if retrieved threat records indicate a real, active threat.
     Returns: {"is_threat": bool, "reason": str}
     """
-    if not GROQ_API_KEY or not threat_records:
+    if package in THREAT_EVAL_CACHE:
+        return THREAT_EVAL_CACHE[package]
+
+    key = get_groq_key()
+    if not key or not threat_records:
         return {"is_threat": False, "reason": "No threat intel available."}
 
-    client = Groq(api_key=GROQ_API_KEY)
+    client = Groq(api_key=key)
     
     intel_text = "\n\n".join([
         f"Source: {t.get('source')}\nTitle: {t.get('title')}\nDescription: {t.get('description')}"
@@ -231,6 +243,37 @@ Provide your answer in strict JSON format:
             temperature=0.1,
         )
         content = completion.choices[0].message.content
-        return json.loads(content)
+        res = json.loads(content)
+        THREAT_EVAL_CACHE[package] = res
+        return res
     except Exception as e:
         return {"is_threat": False, "reason": f"Failed to evaluate threat: {str(e)}"}
+def generate_ai_analysis(package: str, cve_id: str, description: str) -> str:
+    """
+    Uses Groq to generate a plain-English security analysis.
+    """
+    key = get_groq_key()
+    if not key:
+        return ""
+
+    client = Groq(api_key=key)
+    prompt = f"""Summarize this security vulnerability for a developer.
+Package: {package}
+CVE: {cve_id}
+Description: {description}
+
+Provide a 2-sentence explanation:
+1. What is the actual technical risk?
+2. How can an attacker exploit it?
+Keep it under 60 words. No jargon."""
+
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.2,
+        )
+        return completion.choices[0].message.content
+    except Exception:
+        return ""

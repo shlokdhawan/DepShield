@@ -1,6 +1,7 @@
 import os, requests
 
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+def get_hf_token():
+    return os.environ.get("HF_TOKEN", "")
 ZSC_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
 
 ATTACK_LABELS = [
@@ -42,7 +43,8 @@ def classify_vulnerability(cve_id: str, description: str) -> dict:
     if not description or len(description) < 20:
         return {"attack_type": "unknown", "urgency": "monitor only — low exploitability"}
 
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    token = get_hf_token()
+    headers = {"Authorization": f"Bearer {token}"}
 
     def _call(labels, multi_label=False):
         for _ in range(2):

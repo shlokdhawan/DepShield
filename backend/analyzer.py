@@ -26,7 +26,7 @@ try:
 except (ImportError, ValueError):
     from nvd_client import enrich_vulns_with_nvd
     from scoring import ScoringInput, compute_risk_score
-    from rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm
+    from rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm, generate_ai_analysis
     from summarizer import batch_summarize
 
 logger = logging.getLogger(__name__)
@@ -412,13 +412,15 @@ def _analyze_single(dep_info):
                 
     # ── RAG Threat Intelligence Pass ──
     threat_intel_payload = None
+    threat_intel_score = 0.0
+    
     # Only evaluate threats for direct dependencies or highly used ones to save Groq API calls/time
     if depth == 1 or usage_count > 0:
         threat_records = query_threats(name)
         if threat_records:
             eval_result = evaluate_threat_with_llm(name, threat_records)
             if eval_result.get("is_threat"):
-                max_cvss = max(max_cvss, 8.0)
+                threat_intel_score = 8.5 # High default for active threats
                 threat_intel_payload = {
                     "reason": eval_result.get("reason"),
                     "records": threat_records
@@ -480,6 +482,7 @@ def _analyze_single(dep_info):
         has_deprecation_notice=bool(meta.get("deprecated")) if meta else False,
         fix_available=(latest_ver != version),
         fix_breaks_api=is_major_behind,
+        threat_intel_score=threat_intel_score,
     )
     score, sev, score_breakdown = compute_risk_score(scoring_input)
 
@@ -500,9 +503,19 @@ def _analyze_single(dep_info):
     meta_desc = (meta["description"] if meta else "") or ""
     pkg_desc = ""
     plain_desc = ""
+    
     if vulns:
-        pkg_desc = clean_markdown(vulns[0]["summary"])
-        plain_desc = vulns[0].get("plain_desc")
+        v0 = vulns[0]
+        pkg_desc = clean_markdown(v0["summary"])
+        # Prefer Groq-based analysis for direct dependencies, fallback to BART
+        if (depth == 1 or usage_count > 0) and not v0.get("plain_desc"):
+             plain_desc = generate_ai_analysis(name, v0["id"], v0["summary"])
+        else:
+             plain_desc = v0.get("plain_desc")
+             
+        if not plain_desc:
+            plain_desc = pkg_desc
+
         if "no description provided" in pkg_desc.lower() or not pkg_desc:
             pkg_desc = f"Vulnerability detected in {name}. {meta_desc}"
     elif latest_ver != version:
@@ -510,10 +523,10 @@ def _analyze_single(dep_info):
     else:
         pkg_desc = f"No known vulnerabilities. {meta_desc}"
 
-    # Generate AI Remediation for HIGH/CRITICAL
+    # Generate AI Remediation for any non-SAFE package
     reco_reason = ""
-    if sev in ("CRITICAL", "HIGH") and vulns:
-        # Async-like behavior: Upsert to Pinecone
+    if sev != "SAFE":
+        # Async-like behavior: Upsert to Pinecone for future RAG
         for vuln in vulns:
             try:
                 upsert_cve(vuln["id"], vuln.get("summary",""), vuln.get("cwes",[]), vuln["cvss"], name)
@@ -523,7 +536,7 @@ def _analyze_single(dep_info):
             similar = query_similar_cves(pkg_desc, name)
             reco_reason = generate_remediation(name, version, cve_ids, pkg_desc, score, similar, score_breakdown)
         except Exception as e:
-            reco_reason = f"AI Remediation failed: {str(e)}"
+            reco_reason = f"AI Advisor unavailable: {str(e)}"
     else:
         # Fallback to template
         if sev != "SAFE":

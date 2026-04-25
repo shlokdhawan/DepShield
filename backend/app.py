@@ -8,6 +8,9 @@ Endpoints:
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import json
 import shutil   
 import tempfile
@@ -16,11 +19,7 @@ import re
 import logging
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
-
-# Load environment variables FIRST so local imports get the API keys!
-load_dotenv()
 
 try:
     from .threat_intel import update_threat_intelligence

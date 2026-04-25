@@ -35,6 +35,9 @@ class ScoringInput:
     # Fix availability
     fix_available: bool
     fix_breaks_api: bool      # major bump = likely breaking
+    
+    # Threat Intelligence (RAG)
+    threat_intel_score: float = 0.0 # 0–10 boost from Groq/Pinecone
 
 def compute_risk_score(inp: ScoringInput) -> tuple[float, str, dict]:
     """
@@ -128,6 +131,7 @@ def compute_risk_score(inp: ScoringInput) -> tuple[float, str, dict]:
         * depth_multiplier
         + health_penalty
         + fix_penalty
+        + (inp.threat_intel_score * 0.2) # 20% weight for active threat intel
     )
     score = round(min(max(raw, 0.0), 10.0), 1)
 
