@@ -4,17 +4,28 @@ import { SEV } from "./components/Data";
 import Graph from "./components/Graph";
 import Panel from "./components/Panel";
 import {
-  Shield, ShieldAlert, CheckCircle2, LayoutDashboard,
-  Network, AlertTriangle, Workflow, ArrowRight, Github, PackageOpen, Download, ServerCog, Check, X
+  Shield, ShieldAlert, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
+  Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download,
+  Monitor
 } from "lucide-react";
 
+// ─── NEW: GitHub Auth Integration ────────────────────────────────────────────
+import { useAuth } from "./contexts/AuthContext";
+import GitHubLoginButton from "./components/GitHubLoginButton";
+import UserMenu from "./components/UserMenu";
+import MonitoringDashboard from "./components/MonitoringDashboard";
+import { API_BASE } from "./config/api";
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function App() {
+  const [phase, setPhase] = useState("input"); // input | pipeline | skeletons | main | monitoring
+  const [pStep, setPStep] = useState(-1);
+
+  // ─── NEW: Auth state from context ──────────────────────────────────────────
+  const { user, isAuthenticated, login: authLogin, loading: authLoading } = useAuth();
   const [tab, setTab] = useState("dashboard");
   const [inputTab, setInputTab] = useState("url"); // url | file
   const [url, setUrl] = useState("");
-
-  const [phase, setPhase] = useState("input"); // input | pipeline | skeletons | main
-  const [pStep, setPStep] = useState(-1);
 
   const [scanResult, setScanResult] = useState(null);
   const [scanError, setScanError] = useState("");
@@ -22,6 +33,51 @@ export default function App() {
   const [filt, setFilt] = useState("All");
   const [sCol, setSCol] = useState("score");
   const [sDir, setSDir] = useState("desc");
+
+  // Custom Cursor Logic
+  useEffect(() => {
+    const cursor = document.createElement("div");
+    cursor.id = "custom-cursor";
+    document.body.appendChild(cursor);
+
+    const moveCursor = (e) => {
+      cursor.style.left = e.clientX + 'px';
+      cursor.style.top = e.clientY + 'px';
+    };
+
+    const handleHover = (e) => {
+      const target = e.target.closest('button, a, input, [role="button"], tr');
+      if (target) cursor.classList.add('hover');
+      else cursor.classList.remove('hover');
+    };
+
+    window.addEventListener('mousemove', moveCursor);
+    window.addEventListener('mouseover', handleHover);
+
+    return () => {
+      window.removeEventListener('mousemove', moveCursor);
+      window.removeEventListener('mouseover', handleHover);
+      if (document.getElementById("custom-cursor")) {
+        document.body.removeChild(cursor);
+      }
+    };
+  }, []);
+
+  // ─── NEW: Detect OAuth callback token in URL ──────────────────────────────
+  // After GitHub OAuth, the backend redirects here with ?auth_token=<jwt>
+  // We extract it, store it via AuthContext, and clean the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("auth_token");
+    if (token) {
+      authLogin(token).then(() => {
+        // Clean the URL so the token isn't visible/bookmarkable
+        window.history.replaceState({}, "", window.location.pathname);
+        setPhase("monitoring");
+      });
+    }
+  }, [authLogin]);
+  // ──────────────────────────────────────────────────────────────────────────
 
   const TABS = [
     { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={14} /> },
@@ -39,7 +95,7 @@ export default function App() {
     "Finalizing critical security vectors..."
   ];
 
-  const API = "";
+  const API = API_BASE;
 
   const runPipeline = async (backendPromise) => {
     setPhase("pipeline");
@@ -180,12 +236,27 @@ export default function App() {
         )}
 
         <div className="flex items-center gap-4">
-          <span className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded-lg text-sm font-mono font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-[pulse-op_2s_infinite]" />
-            System Active
-          </span>
-        </div>
-      </header>
+          {phase === "main" && (
+            <div className="hidden lg:flex items-center gap-4 mr-2">
+              <span className="text-xs text-ghost/40 font-mono tracking-wide truncate max-w-[150px]">{url || "scanned project"}</span>
+              <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-400/10 border border-teal-400/20 text-teal-400 text-xs font-mono tracking-wide relative overflow-hidden">
+                <span className="w-1.5 h-1.5 rounded-full bg-teal-400 shadow-[0_0_5px_currentColor] animate-pulse" />
+                <span className="font-semibold mix-blend-screen text-[10px] uppercase">System Operational</span>
+              </span>
+            </div>
+          )}
+
+          {/* ─── NEW: User menu (when authenticated) ─── */}
+          {isAuthenticated && (
+            <UserMenu
+              onNavigateMonitoring={() => {
+                setPhase("monitoring");
+                setTab("dashboard");
+              }}
+            />
+          )}
+        </div >
+      </header >
 
       <main className="min-h-screen pt-28 pb-20 px-6 sm:px-12 relative z-10 max-w-[1400px] mx-auto">
 
@@ -247,6 +318,9 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            {/* ─── NEW: GitHub Login CTA ─── */}
+            <GitHubLoginButton />
           </div>
         )}
 
@@ -539,6 +613,20 @@ export default function App() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ─── NEW: MONITORING DASHBOARD (authenticated users) ─── */}
+        {phase === "monitoring" && (
+          <MonitoringDashboard
+            onViewScanResults={(results, repoName) => {
+              // Load webhook scan results into the existing dashboard views
+              // This reuses the exact same Dashboard/Graph/Vulns/Fixes rendering
+              setScanResult(results);
+              setUrl(repoName);
+              setPhase("main");
+              setTab("dashboard");
+            }}
+          />
         )}
       </main>
 

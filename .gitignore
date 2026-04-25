@@ -36,3 +36,6 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# GitHub App private keys (NEVER commit these)
+*.pem
