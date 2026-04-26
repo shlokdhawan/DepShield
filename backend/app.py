@@ -330,10 +330,16 @@ def github_oauth_redirect():
 
     After the user approves, GitHub redirects them to /api/auth/github/callback.
     """
-    # Build the callback URL dynamically based on the request origin
-    # In dev: http://localhost:5173/api/auth/github/callback (proxied by Vite)
-    # In prod: https://your-app.onrender.com/api/auth/github/callback
-    callback_url = request.host_url.rstrip("/") + "/api/auth/github/callback"
+    # Build the callback URL
+    # We force HTTPS in production to avoid mismatch errors with GitHub
+    frontend_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    if frontend_url and "localhost" not in frontend_url:
+        callback_url = frontend_url + "/api/auth/github/callback"
+    else:
+        callback_url = request.host_url.rstrip("/").replace("http://", "https://") + "/api/auth/github/callback"
+        # Localhost exception
+        if "localhost" in request.host:
+            callback_url = request.host_url.rstrip("/") + "/api/auth/github/callback"
 
     # State parameter for CSRF protection
     import secrets
