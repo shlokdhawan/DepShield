@@ -411,11 +411,11 @@ def github_oauth_callback():
 
     # Redirect to the frontend with the token
     # For a monolith, a relative redirect is the most robust way to stay on the same domain.
-    frontend_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
-    if not frontend_url or "localhost" in frontend_url:
-        redirect_url = f"/?auth_token={token}"
-    else:
+    frontend_url = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    if frontend_url:
         redirect_url = f"{frontend_url}/?auth_token={token}"
+    else:
+        redirect_url = f"/?auth_token={token}"
     
     print(f"[DepShield] OAuth Success. Redirecting to: {redirect_url}")
     from flask import redirect as flask_redirect

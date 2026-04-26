@@ -40,6 +40,8 @@ Follow these steps to set up and run DepShield on your local machine.
 
 DepShield requires both the React frontend and the Flask backend to be running.
 
+If you want to use GitHub OAuth locally, set `FRONTEND_URL=http://localhost:5173` in your `.env` so the backend redirects back to the Vite dev server after login.
+
 #### 1. Start Both Simultaneously (Recommended)
 Run the following command in the root directory:
 ```bash
@@ -70,5 +72,4 @@ npm run build
 ```
 
 ---
-
 
