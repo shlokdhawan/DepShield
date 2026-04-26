@@ -391,9 +391,13 @@ def github_oauth_callback():
     token = create_jwt(user_data)
 
     # Redirect to the frontend with the token
-    # The frontend reads the token from the URL and stores it in localStorage
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
-    # In dev mode, frontend is on a different port (5173)
+    # We prioritize the FRONTEND_URL env var, but if it's missing or localhost, 
+    # we use the current request's host to stay on the same domain (monolith mode).
+    frontend_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    if not frontend_url or "localhost" in frontend_url:
+        frontend_url = request.host_url.rstrip("/")
+    
+    print(f"[DepShield] OAuth Success. Redirecting to: {frontend_url}")
     redirect_url = f"{frontend_url}/?auth_token={token}"
 
     from flask import redirect as flask_redirect
