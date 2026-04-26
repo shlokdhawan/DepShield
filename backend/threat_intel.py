@@ -1,8 +1,13 @@
 import os
 import feedparser
 import logging
-from hf_ner import extract_security_entities
-from rag_client import upsert_threat
+
+try:
+    from .hf_ner import extract_security_entities
+    from .rag_client import upsert_threat
+except (ImportError, ValueError):
+    from hf_ner import extract_security_entities
+    from rag_client import upsert_threat
 
 logger = logging.getLogger(__name__)
 

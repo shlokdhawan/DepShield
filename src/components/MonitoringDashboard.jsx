@@ -41,7 +41,7 @@ const GRADE_COLORS = {
   F: '#ef4444',  // red
 };
 
-export default function MonitoringDashboard({ onViewScanResults }) {
+export default function MonitoringDashboard({ onViewScanResults, onTriggerPipeline }) {
   const { user, token } = useAuth();
   const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -168,6 +168,21 @@ export default function MonitoringDashboard({ onViewScanResults }) {
   const handleTriggerScan = async (repoFullName) => {
     if (scanningRepos.has(repoFullName)) return;
 
+    if (onTriggerPipeline) {
+      const p = fetch(`${API_BASE}/api/dashboard/scan/${repoFullName}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      }).then(async r => {
+        if (!r.ok) {
+          const errData = await r.json().catch(() => ({}));
+          throw new Error(errData.error || `Server responded with ${r.status}`);
+        }
+        return r.json();
+      });
+      onTriggerPipeline(p, repoFullName);
+      return;
+    }
+
     setScanningRepos(prev => new Set(prev).add(repoFullName));
     try {
       const res = await fetch(`${API_BASE}/api/dashboard/scan/${repoFullName}`, {
@@ -177,9 +192,7 @@ export default function MonitoringDashboard({ onViewScanResults }) {
       if (res.ok) {
         const data = await res.json();
         console.log(`[DepShield] On-demand scan complete for ${repoFullName}`);
-        // Refresh the list to show the new grade
         fetchRepos();
-        // If we have results, we can even jump straight to them
         if (data.results) {
           onViewScanResults?.(data.results, repoFullName);
         }

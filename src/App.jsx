@@ -626,6 +626,11 @@ export default function App() {
               setPhase("main");
               setTab("dashboard");
             }}
+            onTriggerPipeline={(promise, repoName) => {
+              setUrl(repoName);
+              // Wrap the API format inside runPipeline which expects an Array 
+              runPipeline(promise.then(data => data.results));
+            }}
           />
         )}
       </main>
