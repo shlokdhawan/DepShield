@@ -344,6 +344,8 @@ def github_oauth_redirect():
     # State parameter for CSRF protection
     import secrets
     state = secrets.token_urlsafe(16)
+    
+    print(f"[DepShield] Initiating GitHub OAuth. Using Callback: {callback_url}")
 
     try:
         auth_url = get_github_oauth_url(redirect_uri=callback_url, state=state)
