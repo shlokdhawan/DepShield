@@ -6,7 +6,7 @@ import Panel from "./components/Panel";
 import {
   Shield, ShieldAlert, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
   Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download,
-  Monitor
+  Monitor, ServerCog, Check
 } from "lucide-react";
 
 // ─── NEW: GitHub Auth Integration ────────────────────────────────────────────
