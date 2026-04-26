@@ -331,12 +331,14 @@ def github_oauth_redirect():
     After the user approves, GitHub redirects them to /api/auth/github/callback.
     """
     # Build the callback URL
-    # We force HTTPS in production to avoid mismatch errors with GitHub
-    frontend_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    # We strip any accidental whitespace and force HTTPS in production
+    frontend_url = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
     if frontend_url and "localhost" not in frontend_url:
         callback_url = frontend_url + "/api/auth/github/callback"
     else:
-        callback_url = request.host_url.rstrip("/").replace("http://", "https://") + "/api/auth/github/callback"
+        # Fallback to current request host if FRONTEND_URL is missing
+        clean_host = request.host_url.strip().rstrip("/")
+        callback_url = clean_host.replace("http://", "https://") + "/api/auth/github/callback"
         # Localhost exception
         if "localhost" in request.host:
             callback_url = request.host_url.rstrip("/") + "/api/auth/github/callback"

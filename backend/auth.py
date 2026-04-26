@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 # ─── CONFIGURATION ─────────────────────────────────────────────────────────────
 
 # GitHub OAuth App credentials (created at github.com/settings/applications/new)
-GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
-GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
+GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "").strip()
+GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "").strip()
 
 # GitHub App credentials (created at github.com/settings/apps/new)
 GITHUB_APP_ID = os.environ.get("GITHUB_APP_ID", "")
