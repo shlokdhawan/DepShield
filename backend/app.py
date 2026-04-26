@@ -349,8 +349,17 @@ def github_oauth_redirect():
     
     print(f"[DepShield] Initiating GitHub OAuth. Using Callback: {callback_url}")
 
+    # Build the authorization URL
+    # In production, we omit the redirect_uri to let GitHub use the registered one.
+    # This prevents character mismatch errors.
+    is_prod = os.environ.get("FRONTEND_URL") and "localhost" not in os.environ.get("FRONTEND_URL", "")
+    
     try:
-        auth_url = get_github_oauth_url(redirect_uri=callback_url, state=state)
+        if is_prod:
+            auth_url = get_github_oauth_url(state=state)
+        else:
+            auth_url = get_github_oauth_url(redirect_uri=callback_url, state=state)
+            
         return jsonify({"url": auth_url, "state": state})
     except ValueError as e:
         return jsonify({"error": str(e)}), 500

@@ -57,7 +57,7 @@ GITHUB_API_URL = "https://api.github.com"
 
 # ─── OAUTH FLOW ───────────────────────────────────────────────────────────────
 
-def get_github_oauth_url(redirect_uri: str, state: str = "") -> str:
+def get_github_oauth_url(redirect_uri: str = None, state: str = "") -> str:
     """
     Build the GitHub OAuth authorization URL.
 
