@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { ZoomIn, ZoomOut, RotateCcw, Search } from "lucide-react";
+﻿import { useState, useEffect, useRef } from "react";
+import { ZoomIn, ZoomOut, RotateCcw, Search, X } from "lucide-react";
 import { SEV } from "./Data";
 
 export default function Graph({ deps, onPick }) {
@@ -45,10 +45,8 @@ export default function Graph({ deps, onPick }) {
 
     const repStr = minDist * minDist * 1.5;
     const totalFrames = Math.min(150, 50 + n);
-
     const p = posR.current, v = velR.current;
 
-    // Compute physics synchronously to prevent React render lag
     for (let frame = 0; frame < totalFrames; frame++) {
       const cooling = Math.max(0.15, 1 - frame / totalFrames);
 
@@ -113,40 +111,44 @@ export default function Graph({ deps, onPick }) {
   };
   const matchCount = deps.filter(isMatch).length;
 
+  const toolbarButton = "inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-sky-200 hover:bg-sky-50 text-ghost text-xs font-semibold transition-colors";
+
   return (
-    <div className="flex flex-col gap-6">
-      {/* Toolbars */}
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-3 flex-wrap">
-          <button className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-ghost text-xs tracking-wide transition-all" onClick={() => setZoom(z => Math.min(z + 0.2, 3))}>
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button className={toolbarButton} onClick={() => setZoom(z => Math.min(z + 0.2, 3))} title="Zoom in">
             <ZoomIn size={14} /> Zoom In
           </button>
-          <button className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-ghost text-xs tracking-wide transition-all" onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))}>
+          <button className={toolbarButton} onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))} title="Zoom out">
             <ZoomOut size={14} /> Zoom Out
           </button>
-          <button className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-ghost text-xs tracking-wide transition-all" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>
+          <button className={toolbarButton} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} title="Reset view">
             <RotateCcw size={14} /> Reset
           </button>
-          <span className="text-xs font-mono text-ghost/40">{Math.round(zoom * 100)}%</span>
+          <span className="text-xs font-mono text-ghost/50 px-2">{Math.round(zoom * 100)}%</span>
 
-          <div className="ml-auto relative flex items-center">
+          <div className="sm:ml-auto relative flex items-center w-full sm:w-auto">
             <Search className="absolute left-3 text-ghost/40" size={14} />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search package..."
-              className="pl-9 pr-8 py-2 w-64 rounded-full bg-surface border border-white/10 text-ghost font-mono text-xs focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-ghost/20"
+              className="pl-9 pr-9 py-2 w-full sm:w-72 rounded-lg bg-white border border-sky-200 text-ghost font-mono text-xs focus:border-primary focus:ring-2 focus:ring-primary/20 transition-colors placeholder:text-ghost/40"
             />
-            {search && <button onClick={() => setSearch("")} className="absolute right-3 text-ghost/40 hover:text-ghost transition-colors">✕</button>}
+            {search && (
+              <button onClick={() => setSearch("")} className="absolute right-2 text-ghost/40 hover:text-primary transition-colors" title="Clear search">
+                <X size={14} />
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setSevFilter(null)}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold tracking-wide transition-all ${!sevFilter ? 'bg-primary/20 text-primary border border-primary/50 shadow-[0_0_10px_rgba(123,97,255,0.2)]' : 'bg-transparent text-ghost/40 border border-white/10 hover:border-white/20 hover:text-ghost'
-              }`}>
-            All <span className="font-mono text-[10px] opacity-70">({n})</span>
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-colors border ${!sevFilter ? 'bg-primary text-white border-primary' : 'bg-white text-ghost/60 border-sky-200 hover:text-primary hover:bg-sky-50'}`}>
+            All <span className="font-mono text-[10px] opacity-80">({n})</span>
           </button>
           {["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"].map(sev => {
             const active = sevFilter === sev;
@@ -156,35 +158,24 @@ export default function Graph({ deps, onPick }) {
 
             return (
               <button key={sev} onClick={() => setSevFilter(active ? null : sev)}
-                className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold tracking-wide transition-all ${active ? `bg-[${hex}]/10 text-[${hex}] border border-[${hex}]/50 drop-shadow-[0_0_8px_${hex}]` : 'bg-transparent text-ghost/40 border border-white/10 hover:border-white/20 hover:text-ghost'
-                  }`}
-                style={{
-                  color: active ? hex : undefined,
-                  borderColor: active ? hex : undefined,
-                  backgroundColor: active ? `color-mix(in srgb, ${hex} 10%, transparent)` : undefined,
-                  boxShadow: active ? `0 0 12px color-mix(in srgb, ${hex} 20%, transparent)` : undefined
-                }}>
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: hex, boxShadow: active ? `0 0 6px ${hex}` : `0 0 3px ${hex}44` }} />
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-colors border ${active ? 'bg-white' : 'bg-white text-ghost/60 border-sky-200 hover:text-primary hover:bg-sky-50'}`}
+                style={active ? { color: hex, borderColor: hex, backgroundColor: `${hex}10` } : undefined}>
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: hex }} />
                 {sev.charAt(0) + sev.slice(1).toLowerCase()}
-                <span className="font-mono text-[10px] opacity-70">({cnt})</span>
+                <span className="font-mono text-[10px] opacity-80">({cnt})</span>
               </button>
             );
           })}
-          {(search || sevFilter) && <span className="text-xs font-mono text-ghost/40 ml-2">{matchCount} of {n} matched</span>}
+          {(search || sevFilter) && <span className="text-xs font-mono text-ghost/50 ml-1">{matchCount} of {n} matched</span>}
         </div>
       </div>
 
-      {/* Canvas */}
       <div
-        className="border border-white/10 rounded-3xl overflow-hidden bg-[#05050A] shadow-2xl relative"
+        className="border border-sky-200 rounded-lg overflow-hidden bg-white relative"
         onWheel={onWheel} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU}
       >
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full block" style={{ cursor: dragging ? "grabbing" : "grab" }} onClick={() => setHov(null)}>
           <defs>
-            <radialGradient id="graphBg" cx="50%" cy="50%">
-              <stop offset="0%" stopColor="#0A0A14" />
-              <stop offset="100%" stopColor="#05050A" />
-            </radialGradient>
             {deps.map((d, i) => pos[i] ? (
               <clipPath key={`cp${d.id}`} id={`clip-${d.id}`}>
                 <circle cx={pos[i].x} cy={pos[i].y} r={R - 2} />
@@ -192,18 +183,12 @@ export default function Graph({ deps, onPick }) {
             ) : null)}
           </defs>
 
-          <rect width={W} height={H} fill="url(#graphBg)" />
+          <rect width={W} height={H} fill="#FFFFFF" />
 
-          {/* Neon terminal grid */}
-          {[...Array(12)].map((_, i) => <line key={`h${i}`} x1={0} y1={(i / 11) * H} x2={W} y2={(i / 11) * H} stroke="rgba(123,97,255,0.03)" strokeWidth={1} />)}
-          {[...Array(20)].map((_, i) => <line key={`v${i}`} x1={(i / 19) * W} y1={0} x2={(i / 19) * W} y2={H} stroke="rgba(123,97,255,0.03)" strokeWidth={1} />)}
-
-          {/* Wireframe dome lines */}
-          <ellipse cx={W / 2} cy={H / 2} rx={W / 2 - 15} ry={H / 2 - 15} fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth={1} strokeDasharray="4 6" />
-          <ellipse cx={W / 2} cy={H / 2} rx={W / 3} ry={H / 3} fill="none" stroke="rgba(255,255,255,0.02)" strokeWidth={1} strokeDasharray="2 8" />
+          {[...Array(12)].map((_, i) => <line key={`h${i}`} x1={0} y1={(i / 11) * H} x2={W} y2={(i / 11) * H} stroke="#E0F2FE" strokeWidth={1} />)}
+          {[...Array(20)].map((_, i) => <line key={`v${i}`} x1={(i / 19) * W} y1={0} x2={(i / 19) * W} y2={H} stroke="#E0F2FE" strokeWidth={1} />)}
 
           <g transform={`translate(${W / 2 * (1 - zoom) + pan.x * 0.5},${H / 2 * (1 - zoom) + pan.y * 0.5}) scale(${zoom})`}>
-            {/* Edges */}
             {deps.map((d, i) => {
               if (!pos[i]) return null;
               const next = deps[i + 1];
@@ -212,31 +197,29 @@ export default function Graph({ deps, onPick }) {
               if (!pos[ni]) return null;
               const isActive = hov === d.id || hov === next.id;
               return <line key={`e${d.id}`} x1={pos[i].x} y1={pos[i].y} x2={pos[ni].x} y2={pos[ni].y}
-                stroke={isActive ? "rgba(123,97,255,0.3)" : "rgba(255,255,255,0.02)"}
-                strokeWidth={isActive ? 1.5 : 0.5}
-                className="transition-all duration-300" />;
+                stroke={isActive ? "#0369A1" : "#BFDBFE"}
+                strokeOpacity={isActive ? 0.7 : 0.45}
+                strokeWidth={isActive ? 1.8 : 0.8}
+                className="transition-all duration-200" />;
             })}
 
-            {/* Nodes */}
             {deps.map((d, i) => {
               if (!pos[i]) return null;
               const { x, y } = pos[i], isH = hov === d.id;
               const matched = isMatch(d);
               const cr = isH ? R + 4 : R;
               const isSearchHit = search && d.name.toLowerCase().includes(search.toLowerCase());
-              const col = SEV[d.sev]?.hex || "#2dd4bf";
+              const col = SEV[d.sev]?.hex || "#16A34A";
 
               return (
                 <g key={d.id} onClick={e => { e.stopPropagation(); onPick(d); }}
                   onMouseEnter={() => setHov(d.id)} onMouseLeave={() => setHov(null)}
-                  className={`cursor-pointer transition-opacity duration-300 ${matched ? 'opacity-100' : 'opacity-10'}`}>
-                  {isH && <circle cx={x} cy={y} r={R + 14} fill="none" stroke={col} strokeWidth={1} strokeOpacity={0.4} className="animate-pulse" />}
-                  {isH && <circle cx={x} cy={y} r={R + 8} fill="none" stroke={col} strokeWidth={1} strokeOpacity={0.2} />}
+                  className={`cursor-pointer transition-opacity duration-200 ${matched ? 'opacity-100' : 'opacity-20'}`}>
+                  {isH && <circle cx={x} cy={y} r={R + 8} fill="none" stroke={col} strokeWidth={1.5} strokeOpacity={0.35} />}
                   <circle cx={x} cy={y} r={cr}
-                    fill={`color-mix(in srgb, ${col} 15%, #0A0A14)`}
+                    fill={`${col}18`}
                     stroke={col} strokeWidth={isH ? 2.5 : isSearchHit ? 2 : 1.5}
-                    className="transition-all duration-300"
-                    style={{ filter: isH ? `drop-shadow(0 0 15px ${col})` : isSearchHit ? `drop-shadow(0 0 10px ${col})` : `drop-shadow(0 0 4px color-mix(in srgb, ${col} 40%, transparent))` }} />
+                    className="transition-all duration-200" />
 
                   {maxChars >= 2 && (
                     <text x={x} y={y + 1} textAnchor="middle" dominantBaseline="middle" fill={col}
@@ -250,28 +233,24 @@ export default function Graph({ deps, onPick }) {
               );
             })}
 
-            {/* Tooltip */}
             {hov !== null && hovIdx >= 0 && pos[hovIdx] && (() => {
               const { x, y } = pos[hovIdx], dep = hovDep;
-              const col = SEV[dep.sev]?.hex || "#2dd4bf";
+              const col = SEV[dep.sev]?.hex || "#16A34A";
               const nameLen = dep.name.length;
               const tw = Math.max(180, Math.min(300, nameLen * 8.5 + 40)), th = 85;
               const tx = x + R + 10 + tw > W ? x - tw - R - 5 : x + R + 12;
               const tyRaw = y - th / 2;
               const ty = Math.max(10, Math.min(H - th - 10, tyRaw));
-              const displayName = dep.name.length > 30 ? dep.name.slice(0, 28) + "…" : dep.name;
+              const displayName = dep.name.length > 30 ? dep.name.slice(0, 28) + "..." : dep.name;
 
               return (
                 <g style={{ pointerEvents: "none" }}>
-                  {/* Floating neon panel */}
-                  <rect x={tx} y={ty} width={tw} height={th} rx={12} fill="#0A0A14" stroke={col} strokeWidth={1.5} filter={`drop-shadow(0 10px 25px rgba(0,0,0,0.8)) drop-shadow(0 0 10px color-mix(in srgb, ${col} 30%, transparent))`} />
-                  <rect x={tx + 1.5} y={ty + 1.5} width={tw - 3} height={th - 3} rx={10.5} fill={`color-mix(in srgb, ${col} 5%, transparent)`} />
-
+                  <rect x={tx} y={ty} width={tw} height={th} rx={8} fill="#FFFFFF" stroke={col} strokeWidth={1.5} />
+                  <rect x={tx + 1.5} y={ty + 1.5} width={tw - 3} height={th - 3} rx={6.5} fill={`${col}08`} />
                   <text x={tx + 16} y={ty + 26} fill={col} fontSize={14} fontFamily="Fira Code" fontWeight="700">{displayName}</text>
-                  <text x={tx + 16} y={ty + 48} fill="#F0EFF4" fontSize={12} fontFamily="Sora" opacity={0.6}>v{dep.version}</text>
-                  <text x={tx + 16} y={ty + 68} fill="#F0EFF4" fontSize={12} fontFamily="Fira Code" opacity={0.8}>Score: {dep.score.toFixed(1)} · {dep.sev}</text>
-
-                  <circle cx={tx + tw - 24} cy={ty + 23} r={4} fill={col} filter={`drop-shadow(0 0 4px ${col})`} />
+                  <text x={tx + 16} y={ty + 48} fill="#0C4A6E" fontSize={12} fontFamily="Fira Code" opacity={0.65}>v{dep.version}</text>
+                  <text x={tx + 16} y={ty + 68} fill="#0C4A6E" fontSize={12} fontFamily="Fira Code" opacity={0.8}>Score: {dep.score.toFixed(1)} - {dep.sev}</text>
+                  <circle cx={tx + tw - 24} cy={ty + 23} r={4} fill={col} />
                 </g>
               );
             })()}

@@ -1,20 +1,20 @@
-export const DEPS = [];
+﻿export const DEPS = [];
 
 export const PIPE = [
-  { icon: "⬡", label: "Repo Cloner", desc: "Downloading codebase from remote" },
-  { icon: "⬡", label: "Manifest Scanner", desc: "Reading package.json / requirements.txt" },
-  { icon: "⬡", label: "Dependency Tree Builder", desc: "Mapping direct + transitive dependencies" },
-  { icon: "⬡", label: "Vulnerability Checker", desc: "Cross-referencing NVD + OSV databases" },
-  { icon: "⬡", label: "Graph Engine", desc: "Constructing visual dependency map" },
-  { icon: "⬡", label: "Risk Scoring Engine", desc: "Scoring by Severity, Depth, Age & Maintainer Health" },
-  { icon: "⬡", label: "Origin Tracer", desc: "Tracing how vulnerable libs entered the project" },
-  { icon: "⬡", label: "Priority Ranker", desc: "Ranking remediation by impact" },
+  { icon: "download", label: "Repo Cloner", desc: "Downloading codebase from remote" },
+  { icon: "file-search", label: "Manifest Scanner", desc: "Reading package.json / requirements.txt" },
+  { icon: "network", label: "Dependency Tree Builder", desc: "Mapping direct + transitive dependencies" },
+  { icon: "shield", label: "Vulnerability Checker", desc: "Cross-referencing NVD + OSV databases" },
+  { icon: "nodes", label: "Graph Engine", desc: "Constructing visual dependency map" },
+  { icon: "gauge", label: "Risk Scoring Engine", desc: "Scoring by severity, depth, age, and maintainer health" },
+  { icon: "git-branch", label: "Origin Tracer", desc: "Tracing how vulnerable libraries entered the project" },
+  { icon: "list-checks", label: "Priority Ranker", desc: "Ranking remediation by impact" },
 ];
 
 export const SEV = {
-  CRITICAL: { color: "text-red-500", border: "border-red-500/30", bg: "bg-red-500/10", hex: "#ef4444" },
-  HIGH: { color: "text-orange-500", border: "border-orange-500/30", bg: "bg-orange-500/10", hex: "#f97316" },
-  MEDIUM: { color: "text-yellow-500", border: "border-yellow-500/30", bg: "bg-yellow-500/10", hex: "#eab308" },
-  LOW: { color: "text-amber-500", border: "border-amber-500/30", bg: "bg-amber-500/10", hex: "#f59e0b" },
-  SAFE: { color: "text-teal-400", border: "border-teal-400/30", bg: "bg-teal-400/10", hex: "#2dd4bf" },
+  CRITICAL: { color: "text-red-700", border: "border-red-300", bg: "bg-red-50", hex: "#DC2626" },
+  HIGH: { color: "text-orange-700", border: "border-orange-300", bg: "bg-orange-50", hex: "#EA580C" },
+  MEDIUM: { color: "text-yellow-700", border: "border-yellow-300", bg: "bg-yellow-50", hex: "#CA8A04" },
+  LOW: { color: "text-amber-700", border: "border-amber-300", bg: "bg-amber-50", hex: "#D97706" },
+  SAFE: { color: "text-green-700", border: "border-green-300", bg: "bg-green-50", hex: "#16A34A" },
 };

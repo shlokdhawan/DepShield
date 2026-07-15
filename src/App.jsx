@@ -1,28 +1,25 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Copy, CountUp, GaugeArc, Chip, Bar } from "./components/UI";
 import { SEV } from "./components/Data";
 import Graph from "./components/Graph";
 import Panel from "./components/Panel";
 import {
-  Shield, ShieldAlert, CheckCircle2, ChevronRight, Activity, Zap, Info, LayoutDashboard,
-  Network, AlertTriangle, Workflow, Moon, Sun, ArrowRight, Github, PackageOpen, Download,
-  Monitor, ServerCog, Check
+  Shield, ShieldAlert, CheckCircle2, LayoutDashboard,
+  Network, AlertTriangle, Workflow, ArrowRight, Github, PackageOpen, Download,
+  ServerCog, Check
 } from "lucide-react";
 
-// ─── NEW: GitHub Auth Integration ────────────────────────────────────────────
 import { useAuth } from "./contexts/AuthContext";
 import GitHubLoginButton from "./components/GitHubLoginButton";
 import UserMenu from "./components/UserMenu";
 import MonitoringDashboard from "./components/MonitoringDashboard";
 import { API_BASE } from "./config/api";
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [phase, setPhase] = useState("input"); // input | pipeline | skeletons | main | monitoring
   const [pStep, setPStep] = useState(-1);
 
-  // ─── NEW: Auth state from context ──────────────────────────────────────────
-  const { user, isAuthenticated, login: authLogin, loading: authLoading } = useAuth();
+  const { isAuthenticated, login: authLogin } = useAuth();
   const [tab, setTab] = useState("dashboard");
   const [inputTab, setInputTab] = useState("url"); // url | file
   const [url, setUrl] = useState("");
@@ -63,7 +60,6 @@ export default function App() {
     };
   }, []);
 
-  // ─── NEW: Detect OAuth callback token in URL ──────────────────────────────
   // After GitHub OAuth, the backend redirects here with ?auth_token=<jwt>
   // We extract it, store it via AuthContext, and clean the URL.
   useEffect(() => {
@@ -77,7 +73,6 @@ export default function App() {
       });
     }
   }, [authLogin]);
-  // ──────────────────────────────────────────────────────────────────────────
 
   const TABS = [
     { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={14} /> },
@@ -201,8 +196,8 @@ export default function App() {
   const Stat = ({ label, val, color, sub }) => (
     <div className="glass-panel rounded-2xl p-6 relative flex flex-col justify-between min-h-[140px] transform transition-transform hover:-translate-y-1">
       <div>
-        <p className="text-sm font-bold uppercase tracking-wider text-ghost/60 mb-1">{label}</p>
-        <div className="text-4xl font-bold tracking-tight mt-1" style={{ color }}>
+        <p className="text-sm font-bold uppercase tracking-normal text-ghost/60 mb-1">{label}</p>
+        <div className="text-4xl font-bold tracking-normal mt-1" style={{ color }}>
           {phase === "main" ? <CountUp n={val} /> : val}
         </div>
       </div>
@@ -214,13 +209,12 @@ export default function App() {
     <>
       <div className="apple-aura" />
 
-      {/* ── HEADER ── */}
       <header className="fixed top-0 left-0 w-full z-50 bg-background/80 backdrop-blur-md border-b border-white/5 px-6 py-4 flex items-center justify-between transition-all">
         <div onClick={() => { setPhase("input"); setScanError(""); }} className="flex items-center gap-3 cursor-pointer group">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-background shadow-lg shadow-primary/30">
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white">
             <Shield size={18} />
           </div>
-          <span className="font-bold text-lg tracking-tight">DepShield</span>
+          <span className="font-bold text-lg tracking-normal">DepShield</span>
         </div>
 
         {phase === "main" && (
@@ -239,14 +233,13 @@ export default function App() {
           {phase === "main" && (
             <div className="hidden lg:flex items-center gap-4 mr-2">
               <span className="text-xs text-ghost/40 font-mono tracking-wide truncate max-w-[150px]">{url || "scanned project"}</span>
-              <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-400/10 border border-teal-400/20 text-teal-400 text-xs font-mono tracking-wide relative overflow-hidden">
-                <span className="w-1.5 h-1.5 rounded-full bg-teal-400 shadow-[0_0_5px_currentColor] animate-pulse" />
-                <span className="font-semibold mix-blend-screen text-[10px] uppercase">System Operational</span>
+              <span className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-xs font-mono tracking-wide relative overflow-hidden">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                <span className="font-semibold text-[10px] uppercase">System Operational</span>
               </span>
             </div>
           )}
 
-          {/* ─── NEW: User menu (when authenticated) ─── */}
           {isAuthenticated && (
             <UserMenu
               onNavigateMonitoring={() => {
@@ -260,7 +253,6 @@ export default function App() {
 
       <main className="min-h-screen pt-28 pb-20 px-6 sm:px-12 relative z-10 max-w-[1400px] mx-auto">
 
-        {/* ── ERROR TOAST ── */}
         {scanError && (
           <div className="mb-8 w-full max-w-2xl mx-auto bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl p-4 text-sm flex items-start flex-col sm:flex-row gap-4 shadow-lg animate-[pulse-op_2s]">
             <AlertTriangle size={20} className="shrink-0 mt-0.5" />
@@ -268,28 +260,27 @@ export default function App() {
               <span className="block font-bold mb-1">Scan Failed</span>
               <span className="text-red-400/80">{scanError}</span>
             </div>
-            <button onClick={() => setScanError("")} className="text-red-400 hover:text-red-300 text-sm uppercase font-bold tracking-wider">Dismiss</button>
+            <button onClick={() => setScanError("")} className="text-red-400 hover:text-red-300 text-sm uppercase font-bold tracking-normal">Dismiss</button>
           </div>
         )}
 
-        {/* ── INPUT PHASE ── */}
         {phase === "input" && (
-          <div className="max-w-xl mx-auto pt-16 animate-in fade-in duration-500">
-            <div className="text-center mb-12">
-              <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-                Dependancy Risk <span className="text-primary">Analyzer</span>
+          <div className="max-w-5xl mx-auto pt-8 animate-in fade-in duration-500">
+            <div className="text-center mb-8">
+              <h1 className="text-4xl md:text-5xl font-bold tracking-normal mb-4 font-head">
+                Dependency Risk <span className="text-primary">Analyzer</span>
               </h1>
               <p className="text-ghost/60 text-base leading-relaxed">
-                Seamlessly evaluate Node.js ecosystems for abandoned supply chains and zero-day vulnerabilities.
+                Audit open-source dependencies for vulnerabilities, abandoned packages, and upgrade paths before they hit production.
               </p>
             </div>
 
-            <div className="glass-panel p-2 rounded-[2rem]">
+            <div className="glass-panel p-2 rounded-lg max-w-2xl mx-auto">
               <div className="p-6">
-                <div className="flex gap-2 mb-6 bg-background rounded-xl p-1.5 border border-white/5">
+                <div className="flex gap-2 mb-6 bg-sky-50 rounded-lg p-1.5 border border-sky-200">
                   {[{ id: "url", label: "GitHub URL", icon: <Github size={16} /> }, { id: "file", label: "File Upload", icon: <PackageOpen size={16} /> }].map(t => (
                     <button key={t.id} onClick={() => setInputTab(t.id)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${inputTab === t.id ? "bg-surface shadow-[0_2px_10px_rgba(0,0,0,0.5)] border border-white/5 text-ghost" : "text-ghost/40 hover:text-ghost/80"
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${inputTab === t.id ? "bg-white border border-primary/30 text-primary" : "text-ghost/50 hover:text-primary"
                         }`}>
                       {t.icon} {t.label}
                     </button>
@@ -299,7 +290,7 @@ export default function App() {
                 {inputTab === "url" ? (
                   <div className="flex flex-col gap-4">
                     <input type="text" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://github.com/owner/repository"
-                      className="w-full bg-background border border-white/10 rounded-xl px-4 py-3.5 text-ghost font-mono text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-ghost/20 outline-none" />
+                      className="w-full bg-white border border-sky-200 rounded-lg px-4 py-3.5 text-ghost font-mono text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-ghost/40 outline-none" />
                     <button onClick={startURLScan} className="btn-vapor-primary text-base py-3.5 mt-2 w-full">
                       Initialize Scan
                     </button>
@@ -307,8 +298,8 @@ export default function App() {
                 ) : (
                   <label onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) startFileScan(file); }}
                     onDragOver={e => e.preventDefault()}
-                    className="flex flex-col items-center justify-center border-2 border-dashed border-white/10 hover:border-primary/50 hover:bg-primary/5 rounded-xl p-12 cursor-pointer transition-all">
-                    <div className="w-14 h-14 rounded-xl bg-background border border-white/5 flex items-center justify-center mb-4 shadow-sm text-primary">
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-sky-200 hover:border-primary hover:bg-sky-50 rounded-lg p-12 cursor-pointer transition-all">
+                    <div className="w-14 h-14 rounded-lg bg-sky-50 border border-sky-200 flex items-center justify-center mb-4 text-primary">
                       <Download size={20} />
                     </div>
                     <div className="font-semibold text-sm mb-1 tracking-wide">Drop package.json here</div>
@@ -319,15 +310,13 @@ export default function App() {
               </div>
             </div>
 
-            {/* ─── NEW: GitHub Login CTA ─── */}
             <GitHubLoginButton />
           </div>
         )}
 
-        {/* ── PIPELINE ANIMATION PHASE ── */}
         {phase === "pipeline" && (
           <div className="max-w-xl mx-auto pt-24 text-left animate-in fade-in duration-300">
-            <h2 className="text-3xl font-bold tracking-tight mb-8 text-center flex items-center justify-center gap-4">
+            <h2 className="text-3xl font-bold tracking-normal mb-8 text-center flex items-center justify-center gap-4">
               <ServerCog className="text-primary animate-[spin_4s_linear_infinite]" size={28} />
               System Core Initializing
             </h2>
@@ -351,13 +340,12 @@ export default function App() {
           </div>
         )}
 
-        {/* ── LOADING PHASE (SKELETONS) ── */}
         {phase === "skeletons" && (
           <div className="max-w-7xl mx-auto pt-6 w-full animate-pulse">
             <div className="flex items-center gap-4 mb-8 w-full glass-panel rounded-2xl p-6 relative overflow-hidden">
               <ServerCog size={24} className="text-primary/50 animate-bounce" />
               <div>
-                <div className="font-bold tracking-tight text-lg text-ghost/80">Cross-referencing global vulnerability databases</div>
+                <div className="font-bold tracking-normal text-lg text-ghost/80">Cross-referencing global vulnerability databases</div>
                 <div className="text-sm text-ghost/50 mt-1">Downloading metadata components...</div>
               </div>
             </div>
@@ -398,7 +386,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── MAIN VIEWS ── */}
         {phase === "main" && scanResult && (
           <div className="max-w-7xl mx-auto pt-6 animate-in fade-in duration-500">
             {/* DASHBOARD */}
@@ -416,7 +403,7 @@ export default function App() {
                   <div className="lg:col-span-3 glass-panel rounded-2xl p-8 flex flex-col items-center justify-center text-center">
                     <GaugeArc value={risk} size={140} />
                     <div className="mt-8 font-bold text-7xl leading-none" style={{ color: gc }}>{grade}</div>
-                    <div className="mt-4 text-sm font-bold uppercase tracking-widest text-ghost/40">Audit Grade</div>
+                    <div className="mt-4 text-sm font-bold uppercase tracking-normal text-ghost/40">Audit Grade</div>
                   </div>
 
                   {/* Critical List */}
@@ -433,7 +420,7 @@ export default function App() {
                               {d.name} <span className="text-sm font-mono text-ghost/40 font-normal">v{d.version}</span>
                             </div>
                             <div className="text-sm text-red-400 font-mono mt-1 flex items-center gap-1.5">
-                              <ShieldAlert size={12} /> {d.cves.join(" · ")}
+                              <ShieldAlert size={12} /> {d.cves.join(" / ")}
                             </div>
                           </div>
                           <div className="text-right">
@@ -488,7 +475,7 @@ export default function App() {
                         <div className="text-sm text-ghost/40 font-mono mb-3">v{d.version}</div>
                         <div className="flex justify-between items-center mt-2">
                           <Chip sev={d.sev} />
-                          <span className={`text-sm tracking-wider font-bold ${d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/50"}`}>{d.maint}</span>
+                          <span className={`text-sm tracking-normal font-bold ${d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/50"}`}>{d.maint}</span>
                         </div>
                       </div>
                     ))}
@@ -501,7 +488,7 @@ export default function App() {
             {tab === "graph" && (
               <div>
                 <div className="mb-6">
-                  <h2 className="text-2xl font-bold tracking-tight mb-1">Architecture Topology</h2>
+                  <h2 className="text-2xl font-bold tracking-normal mb-1">Architecture Topology</h2>
                   <p className="text-sm text-ghost/60">Node tree structure map showing origin lineages.</p>
                 </div>
                 <Graph deps={activeDeps} onPick={setSel} />
@@ -513,7 +500,7 @@ export default function App() {
               <div>
                 <div className="mb-6 flex justify-between items-end flex-wrap gap-4">
                   <div>
-                    <h2 className="text-2xl font-bold tracking-tight mb-1">Security Ledger</h2>
+                    <h2 className="text-2xl font-bold tracking-normal mb-1">Security Ledger</h2>
                     <p className="text-sm text-ghost/60">Comprehensive audit list of all scanned libraries.</p>
                   </div>
                   <div className="flex gap-1 p-1 bg-surface border border-white/5 rounded-lg overflow-x-auto">
@@ -532,11 +519,11 @@ export default function App() {
                       <thead>
                         <tr className="bg-white/[0.02]">
                           {[["name", "Library"], ["version", "Version"], ["latest", "Latest"], ["sev", "Severity"], ["score", "Score"], ["vulns", "CVEs"], ["maint", "Maintainer"]].map(([c, l]) => (
-                            <th key={c} onClick={() => doSort(c)} className="p-4 text-sm uppercase font-bold tracking-widest text-ghost/50 border-b border-white/5 cursor-pointer hover:bg-white/5">
-                              <span className="flex items-center gap-2">{l} <span className={`${sCol === c ? 'opacity-100 text-primary' : 'opacity-0'}`}>{sDir === "asc" ? "↑" : "↓"}</span></span>
+                            <th key={c} onClick={() => doSort(c)} className="p-4 text-sm uppercase font-bold tracking-normal text-ghost/50 border-b border-white/5 cursor-pointer hover:bg-white/5">
+                              <span className="flex items-center gap-2">{l} <span className={`${sCol === c ? 'opacity-100 text-primary' : 'opacity-0'}`}>{sDir === "asc" ? "ASC" : "DESC"}</span></span>
                             </th>
                           ))}
-                          <th className="p-4 text-sm uppercase font-bold tracking-widest text-ghost/50 border-b border-white/5">Log</th>
+                          <th className="p-4 text-sm uppercase font-bold tracking-normal text-ghost/50 border-b border-white/5">Log</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -549,7 +536,7 @@ export default function App() {
                             <td className="p-4 w-40 max-w-[160px]"><Bar score={d.score} /></td>
                             <td className="p-4"><span className={`font-mono font-medium text-sm ${d.vulns > 0 ? 'text-red-400' : 'text-ghost/30'}`}>{d.vulns}</span></td>
                             <td className="p-4">
-                              <span className="flex items-center gap-2 text-sm font-bold tracking-wider">
+                              <span className="flex items-center gap-2 text-sm font-bold tracking-normal">
                                 <span className={`w-2 h-2 rounded-full ${d.maint === "Active" ? "bg-emerald-500" : d.maint === "Abandoned" ? "bg-amber-500" : "bg-ghost/40"}`} />
                                 <span className={d.maint === "Active" ? "text-emerald-500" : d.maint === "Abandoned" ? "text-amber-500" : "text-ghost/40"}>{d.maint}</span>
                               </span>
@@ -572,7 +559,7 @@ export default function App() {
             {tab === "fixes" && (
               <div className="max-w-4xl mx-auto">
                 <div className="mb-10 text-center">
-                  <h2 className="text-3xl font-bold tracking-tight mb-2">Remediation Blueprint</h2>
+                  <h2 className="text-3xl font-bold tracking-normal mb-2">Remediation Blueprint</h2>
                   <p className="text-sm text-ghost/60">Ranked actionable fixes targeting the highest CVSS impact vectors.</p>
                 </div>
 
@@ -585,19 +572,19 @@ export default function App() {
                           <div>
                             <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
                               {d.name}
-                              <span className="bg-background px-2 py-0.5 rounded text-sm font-mono font-normal border border-white/5 text-ghost/50 tracking-wider">v{d.version} &rarr; <span className="text-emerald-400">v{d.fixv}</span></span>
+                              <span className="bg-background px-2 py-0.5 rounded text-sm font-mono font-normal border border-white/5 text-ghost/50 tracking-normal">v{d.version} &rarr; <span className="text-emerald-400">v{d.fixv}</span></span>
                             </h3>
                           </div>
                           <div className="flex items-center gap-2">
                             <Chip sev={d.sev} />
-                            <span className="px-2 py-1 bg-background border border-white/5 text-ghost/60 rounded text-sm uppercase font-bold tracking-wider">{d.effort} Fix</span>
+                            <span className="px-2 py-1 bg-background border border-white/5 text-ghost/60 rounded text-sm uppercase font-bold tracking-normal">{d.effort} Fix</span>
                           </div>
                         </div>
 
                         <p className="text-sm text-ghost/70 leading-relaxed mb-4 border-l-2 border-white/10 pl-3">{d.desc}</p>
 
                         <div className="bg-background border border-white/5 rounded-lg p-3 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
-                          <code className="text-primary font-mono text-sm break-all tracking-wider">{d.fix}</code>
+                          <code className="text-primary font-mono text-sm break-all tracking-normal">{d.fix}</code>
                           <Copy text={d.fix} />
                         </div>
                       </div>
@@ -615,7 +602,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ─── NEW: MONITORING DASHBOARD (authenticated users) ─── */}
         {phase === "monitoring" && (
           <MonitoringDashboard
             onViewScanResults={(results, repoName) => {
@@ -639,3 +625,6 @@ export default function App() {
     </>
   );
 }
+
+
+

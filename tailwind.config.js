@@ -1,4 +1,4 @@
-/** @type {import('tailwindcss').Config} */
+﻿/** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
@@ -7,16 +7,18 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#04040a',
-        primary: '#7B61FF',
-        ghost: '#FFFFFF',
-        surface: 'rgba(30, 30, 35, 0.65)', 
+        background: '#F0F9FF',
+        primary: '#0369A1',
+        secondary: '#0EA5E9',
+        cta: '#22C55E',
+        ghost: '#0C4A6E',
+        surface: '#FFFFFF',
       },
       fontFamily: {
-        head: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', 'system-ui', 'sans-serif'],
-        drama: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', 'system-ui', 'sans-serif'],
-        mono: ['"SF Mono"', 'JetBrains Mono', 'Fira Code', 'monospace'],
-        body: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+        head: ['"Fira Code"', '"SF Mono"', 'JetBrains Mono', 'monospace'],
+        drama: ['"Fira Code"', '"SF Mono"', 'JetBrains Mono', 'monospace'],
+        mono: ['"Fira Code"', '"SF Mono"', 'JetBrains Mono', 'monospace'],
+        body: ['"Fira Sans"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
       },
       borderRadius: {
         '4xl': '2rem',

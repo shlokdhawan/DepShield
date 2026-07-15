@@ -1,32 +1,52 @@
-import { useState, useRef, useEffect } from "react";
+﻿import { useState, useRef, useEffect } from "react";
 import { Copy, Chip } from "./UI";
 import { SEV } from "./Data";
-import { X, AlertTriangle, ShieldAlert, GitBranch, ArrowRight, Activity, Zap } from "lucide-react";
+import {
+  X, AlertTriangle, ShieldAlert, GitBranch, ArrowRight,
+  Activity, Zap, GitPullRequest, ChevronUp
+} from "lucide-react";
 import gsap from "gsap";
+
+function cleanMarkdown(text = "") {
+  return text
+    .replace(/#+\s*/g, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/`(.*?)`/g, '$1')
+    .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+    .trim();
+}
+
+function MaintainerBadge({ maint }) {
+  const tone = maint === "Active" ? "bg-green-600" : maint === "Abandoned" ? "bg-red-600" : "bg-amber-500";
+  return (
+    <span className="inline-flex items-center gap-2 px-3 py-1 bg-white border border-sky-200 text-ghost/70 rounded-lg text-sm font-mono">
+      <span className={`w-2 h-2 rounded-full ${tone}`} />
+      {maint}
+    </span>
+  );
+}
 
 export default function Panel({ dep, onClose }) {
   const [pr, setPr] = useState(false);
+  const [showAllVulns, setShowAllVulns] = useState(false);
   const panelRef = useRef(null);
   const overlayRef = useRef(null);
 
-  const [showAllVulns, setShowAllVulns] = useState(false);
-
   useEffect(() => {
     if (!dep) return;
-    setShowAllVulns(false); // Reset when dep changes
+    setShowAllVulns(false);
+    setPr(false);
     const ctx = gsap.context(() => {
-      // Entrance animation
-      gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power2.out" });
-      gsap.fromTo(panelRef.current, { x: 500, opacity: 0 }, { x: 0, opacity: 1, duration: 0.5, ease: "power3.out", delay: 0.05 });
-
-      // Stagger children
+      gsap.fromTo(overlayRef.current, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: "power2.out" });
+      gsap.fromTo(panelRef.current, { x: 500, opacity: 0 }, { x: 0, opacity: 1, duration: 0.35, ease: "power3.out", delay: 0.03 });
       gsap.from(".panel-item", {
-        y: 20,
+        y: 12,
         opacity: 0,
-        duration: 0.5,
-        stagger: 0.08,
+        duration: 0.25,
+        stagger: 0.04,
         ease: "power2.out",
-        delay: 0.2
+        delay: 0.12
       });
     }, panelRef);
 
@@ -35,75 +55,79 @@ export default function Panel({ dep, onClose }) {
 
   const handleClose = () => {
     const ctx = gsap.context(() => {
-      gsap.to(overlayRef.current, { opacity: 0, duration: 0.2 });
-      gsap.to(panelRef.current, { x: 500, opacity: 0, duration: 0.3, ease: "power2.inOut", onComplete: onClose });
+      gsap.to(overlayRef.current, { opacity: 0, duration: 0.15 });
+      gsap.to(panelRef.current, { x: 500, opacity: 0, duration: 0.22, ease: "power2.inOut", onComplete: onClose });
     });
     return () => ctx.revert();
   };
 
   if (!dep) return null;
-  const col = SEV[dep.sev]?.hex || "#2dd4bf";
+
+  const col = SEV[dep.sev]?.hex || "#16A34A";
   const score = dep.score || 0;
   const pct = score / 10;
   const diff = `diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -12,4 +12,4 @@\n   "dependencies": {\n-    "${dep.name}": "^${dep.version}",\n+    "${dep.name}": "^${dep.fixv}",\n   }`;
+
+  const breakageTone = dep.breakage_risk === 'HIGH'
+    ? 'bg-red-50 border-red-200 text-red-700'
+    : dep.breakage_risk === 'MEDIUM'
+      ? 'bg-amber-50 border-amber-200 text-amber-700'
+      : 'bg-green-50 border-green-200 text-green-700';
 
   return (
     <>
       <div
         ref={overlayRef}
         onClick={handleClose}
-        className="fixed inset-0 bg-background/80 backdrop-blur-sm z-[98] transition-opacity"
+        className="fixed inset-0 bg-ghost/25 z-[98] transition-opacity"
       />
       <aside
         ref={panelRef}
-        className="fixed top-0 right-0 w-full max-w-[500px] h-screen z-[99] bg-surface backdrop-blur-3xl border-l border-white/10 overflow-y-auto shadow-[inset_1px_0_1px_rgba(255,255,255,0.1),-20px_0_50px_rgba(0,0,0,0.4)]"
+        className="fixed top-0 right-0 w-full max-w-[500px] h-screen z-[99] bg-white border-l border-sky-200 overflow-y-auto"
         style={{ scrollbarWidth: "thin" }}
       >
-        {/* Top bar */}
-        <div className="sticky top-0 z-10 px-6 py-5 border-b border-white/10 bg-surface backdrop-blur-md flex justify-between items-start shadow-sm">
-          <div>
-            <div className="text-2xl font-bold font-head text-ghost tracking-tight flex items-center gap-3">
-              {dep.sev === 'CRITICAL' && <AlertTriangle size={24} color={col} className="animate-pulse" />}
+        <div className="sticky top-0 z-10 px-6 py-5 border-b border-sky-200 bg-white flex justify-between items-start">
+          <div className="min-w-0 pr-4">
+            <div className="text-2xl font-bold font-head text-ghost flex items-center gap-3 break-words">
+              {dep.sev === 'CRITICAL' && <AlertTriangle size={24} color={col} />}
               {dep.name}
             </div>
             {dep.threat_intel && (
-              <div className="mt-2 bg-red-500/20 border border-red-500/30 text-red-400 px-3 py-1.5 rounded-lg text-sm font-bold uppercase tracking-wider animate-pulse flex items-center gap-2">
-                <ShieldAlert size={14} /> Security Alert: Known Threat Detected
+              <div className="mt-3 bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm font-bold uppercase flex items-center gap-2">
+                <ShieldAlert size={14} /> Known Threat Detected
               </div>
             )}
-            <div className="text-base text-ghost/60 mt-1 font-mono flex items-center gap-3">
+            <div className="text-sm text-ghost/60 mt-2 font-mono flex items-center gap-3 flex-wrap">
               v{dep.version} <ArrowRight size={14} className="text-ghost/40" /> <span className="text-primary font-bold">v{dep.fixv}</span>
             </div>
             <div className="mt-4 flex gap-2 flex-wrap items-center">
               <Chip sev={dep.sev} />
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/5 border border-white/10 text-ghost/70 rounded-full text-sm font-mono">
-                {dep.maint === "Active" ? "🟢" : dep.maint === "Abandoned" ? "🔴" : "🟡"} {dep.maint}
-              </span>
+              <MaintainerBadge maint={dep.maint} />
               {dep.breakage_risk && (
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 border rounded-full text-sm font-mono font-bold ${dep.breakage_risk === 'HIGH' ? 'bg-red-500/10 border-red-500/30 text-red-500' : dep.breakage_risk === 'MEDIUM' ? 'bg-amber-500/10 border-amber-500/30 text-amber-500' : 'bg-teal-400/10 border-teal-400/30 text-teal-400'}`}>
-                  {dep.breakage_risk === 'HIGH' ? '⚠️ High Breakage Risk' : dep.breakage_risk === 'MEDIUM' ? '⚡ Med Breakage Risk' : '✓ Low Breakage Risk'}
+                <span className={`inline-flex items-center gap-2 px-3 py-1 border rounded-lg text-sm font-mono font-bold ${breakageTone}`}>
+                  {dep.breakage_risk === 'HIGH' ? 'High Breakage Risk' : dep.breakage_risk === 'MEDIUM' ? 'Medium Breakage Risk' : 'Low Breakage Risk'}
                 </span>
               )}
             </div>
           </div>
           <button
             onClick={handleClose}
-            className="p-2 text-ghost/50 hover:text-ghost hover:bg-white/10 rounded-full transition-all"
+            className="p-2 text-ghost/50 hover:text-primary hover:bg-sky-50 rounded-lg transition-colors"
+            title="Close panel"
           >
             <X size={20} />
           </button>
         </div>
 
         <div className="p-6">
-          {/* CVEs */}
           {dep.cves?.length > 0 && (
             <div className="panel-item mb-8">
-              <p className="text-sm font-bold uppercase tracking-widest text-[#ef4444] mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase text-red-700 mb-3 flex items-center gap-2">
                 <ShieldAlert size={14} /> Known Exploits
               </p>
               <div className="flex flex-wrap gap-2">
                 {dep.cves?.map(c => (
-                  <span key={c} className="bg-red-500/10 border border-red-500/30 text-red-500 rounded-md px-3 py-1.5 text-sm font-mono drop-shadow-[0_0_8px_rgba(239,68,68,0.3)]">
+                  <span key={c} className="bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-1.5 text-sm font-mono">
                     {c}
                   </span>
                 ))}
@@ -111,33 +135,25 @@ export default function Panel({ dep, onClose }) {
             </div>
           )}
 
-          {/* Description */}
           <div className="panel-item mb-8">
-            <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+            <p className="text-sm font-bold uppercase text-ghost/50 mb-3 flex items-center gap-2">
               <Activity size={14} /> AI Analysis
             </p>
-            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-sm leading-relaxed font-body shadow-inner space-y-4 break-words text-justify">
+            <div className="bg-sky-50 border border-sky-200 rounded-lg p-5 text-ghost/80 text-sm leading-relaxed font-body space-y-4 break-words">
               {showAllVulns && dep.vuln_details?.length > 1 ? (
                 <>
                   {dep.vuln_details.map((v, i) => {
-                    const text = v.plain_desc || v.summary || "";
-                    const cleanText = text
-                      .replace(/#+\s*/g, '')
-                      .replace(/\*\*(.*?)\*\*/g, '$1')
-                      .replace(/__(.*?)__/g, '$1')
-                      .replace(/`(.*?)`/g, '$1')
-                      .replace(/\[(.*?)\]\(.*?\)/g, '$1')
-                      .trim();
+                    const text = cleanMarkdown(v.plain_desc || v.summary || "");
                     return (
                       <div key={i} className="mb-4 last:mb-0 break-words whitespace-pre-wrap">
                         <strong className="text-primary block mb-1 text-sm font-mono">{v.id}</strong>
-                        {cleanText}
+                        {text}
                       </div>
                     );
                   })}
-                  <button 
-                    onClick={() => setShowAllVulns(false)} 
-                    className="text-primary hover:text-primary/80 font-bold text-sm uppercase tracking-wider block mt-4"
+                  <button
+                    onClick={() => setShowAllVulns(false)}
+                    className="text-primary hover:text-primary/80 font-bold text-sm uppercase block mt-4"
                   >
                     Show Less
                   </button>
@@ -146,44 +162,41 @@ export default function Panel({ dep, onClose }) {
                 <div className="break-words whitespace-pre-wrap">
                   {dep.plain_desc || dep.desc}
                   {dep.vuln_details?.length > 1 && (
-                    <span 
-                      className="text-primary font-bold cursor-pointer hover:underline ml-2 whitespace-nowrap"
+                    <button
+                      className="text-primary font-bold hover:underline ml-2 whitespace-nowrap"
                       onClick={() => setShowAllVulns(true)}
                     >
                       (+{dep.vuln_details.length - 1} more)
-                    </span>
+                    </button>
                   )}
                 </div>
               )}
             </div>
           </div>
 
-          {/* CVSS Gauge */}
-          <div className="panel-item mb-8 bg-[#0A0A14]/80 border border-white/10 rounded-2xl p-6 flex items-center gap-6 shadow-[0_4px_20px_rgba(0,0,0,0.5)] relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-[radial-gradient(ellipse_at_top_right,var(--tw-gradient-stops))] from-white/5 to-transparent blur-xl pointer-events-none" />
-            <svg width={120} height={64} viewBox="0 0 200 108" className="drop-shadow-lg">
-              <path d="M 20 98 A 80 80 0 0 1 180 98" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={14} strokeLinecap="round" />
+          <div className="panel-item mb-8 bg-white border border-sky-200 rounded-lg p-6 flex items-center gap-6 relative overflow-hidden">
+            <svg width={120} height={64} viewBox="0 0 200 108">
+              <path d="M 20 98 A 80 80 0 0 1 180 98" fill="none" stroke="#DBEAFE" strokeWidth={14} strokeLinecap="round" />
               <path d="M 20 98 A 80 80 0 0 1 180 98" fill="none" stroke={col} strokeWidth={14} strokeLinecap="round"
-                strokeDasharray={`${pct * 251.3} 251.3`} className="transition-all duration-1000 ease-out"
-                style={{ filter: `drop-shadow(0 0 8px color-mix(in srgb, ${col} 60%, transparent))` }} />
+                strokeDasharray={`${pct * 251.3} 251.3`} className="transition-all duration-700 ease-out" />
               <text x={100} y={78} textAnchor="middle" fill={col} fontSize={36} fontFamily="Fira Code" fontWeight="700">{score.toFixed(1)}</text>
             </svg>
             <div>
-              <div className="text-3xl font-bold font-head" style={{ color: col, textShadow: `0 0 15px color-mix(in srgb, ${col} 40%, transparent)` }}>
+              <div className="text-3xl font-bold font-head" style={{ color: col }}>
                 {dep.sev}
               </div>
-              <div className="text-ghost/40 text-sm mt-1 tracking-wide uppercase font-bold">CVSS Base Score</div>
-              <div className="text-ghost/60 text-sm mt-2 font-mono flex items-center gap-2">
+              <div className="text-ghost/50 text-sm mt-1 uppercase font-bold">CVSS Base Score</div>
+              <div className="text-ghost/60 text-sm mt-2 font-mono flex items-center gap-2 flex-wrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-ghost/40" />
-                {dep.vulns} CVE{dep.vulns !== 1 ? "s" : ""} · {dep.updated}
+                {dep.vulns} CVE{dep.vulns !== 1 ? "s" : ""} / {dep.updated}
               </div>
               {dep.attack_type && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-sm text-ghost/50 uppercase font-bold tracking-tight">
+                  <span className="px-2 py-1 bg-sky-50 border border-sky-200 rounded text-sm text-ghost/60 uppercase font-bold">
                     {dep.attack_type}
                   </span>
                   {dep.urgency && (
-                    <span className="px-2 py-0.5 bg-primary/10 border border-primary/20 rounded text-sm text-primary uppercase font-bold tracking-tight">
+                    <span className="px-2 py-1 bg-primary/10 border border-primary/20 rounded text-sm text-primary uppercase font-bold">
                       {dep.urgency}
                     </span>
                   )}
@@ -192,9 +205,8 @@ export default function Panel({ dep, onClose }) {
             </div>
           </div>
 
-          {/* Origin trace */}
           <div className="panel-item mb-8">
-            <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+            <p className="text-sm font-bold uppercase text-ghost/50 mb-3 flex items-center gap-2">
               <GitBranch size={14} /> Origin Trace
             </p>
             <div className="flex items-center flex-wrap gap-2 font-mono text-sm">
@@ -203,52 +215,48 @@ export default function Panel({ dep, onClose }) {
                 return (
                   <span key={i} className="flex items-center gap-2">
                     <span className={`px-3 py-1.5 rounded-lg border flex items-center gap-2 ${isLast
-                        ? "bg-red-500/10 border-red-500/30 text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.2)]"
-                        : "bg-primary/10 border-primary/20 text-primary"
+                        ? "bg-red-50 border-red-200 text-red-700"
+                        : "bg-sky-50 border-sky-200 text-primary"
                       }`}>
-                      {isLast && <Zap size={12} className="text-red-500" />}
+                      {isLast && <Zap size={12} className="text-red-700" />}
                       {part}
                     </span>
-                    {!isLast && <ArrowRight size={14} className="text-ghost/30 mx-1" />}
+                    {!isLast && <ArrowRight size={14} className="text-ghost/35 mx-1" />}
                   </span>
-                )
+                );
               })}
             </div>
           </div>
 
-          {/* Codebase Context & Smart Advisor */}
           <div className="panel-item mb-8">
-            <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+            <p className="text-sm font-bold uppercase text-ghost/50 mb-3 flex items-center gap-2">
               <Zap size={14} /> Smart Advisor
             </p>
-            <div className="bg-[#0A0A14]/60 border border-white/10 rounded-2xl p-5 text-ghost/80 text-sm leading-relaxed font-body shadow-inner space-y-4 text-justify">
+            <div className="bg-sky-50 border border-sky-200 rounded-lg p-5 text-ghost/80 text-sm leading-relaxed font-body space-y-4">
               {dep.reco ? (
-                <div className="whitespace-pre-wrap">
-                  {dep.reco}
-                </div>
+                <div className="whitespace-pre-wrap">{dep.reco}</div>
               ) : (
-                <div className="text-ghost/40 italic">No specific remediation advice available.</div>
+                <div className="text-ghost/50 italic">No specific remediation advice available.</div>
               )}
-              
+
               {dep.usage_info && (
-                <div className="pt-3 border-t border-white/5">
-                  <strong className="text-white/90 block mb-1">Impact Analysis:</strong>
-                  <span className="text-primary font-mono bg-primary/10 border border-primary/20 px-2 py-1 rounded text-sm">{dep.usage_info}</span>
+                <div className="pt-3 border-t border-sky-200">
+                  <strong className="text-ghost block mb-1">Impact Analysis:</strong>
+                  <span className="text-primary font-mono bg-white border border-sky-200 px-2 py-1 rounded text-sm">{dep.usage_info}</span>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Risk Breakdown */}
           {dep.score_breakdown && (
             <div className="panel-item mb-8">
-              <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase text-ghost/50 mb-3 flex items-center gap-2">
                 <Activity size={14} /> Risk Factor Analysis
               </p>
-              <div className="bg-[#0A0A14]/40 border border-white/5 rounded-2xl p-4 space-y-2.5">
+              <div className="bg-white border border-sky-200 rounded-lg p-4 space-y-2.5">
                 {Object.entries(dep.score_breakdown).map(([key, val]) => (
-                  <div key={key} className="flex justify-between items-center text-sm font-mono">
-                    <span className="text-ghost/40 uppercase tracking-tighter">{key.replace(/_/g, " ")}</span>
+                  <div key={key} className="flex justify-between items-center text-sm font-mono gap-4">
+                    <span className="text-ghost/55 uppercase">{key.replace(/_/g, " ")}</span>
                     <span className="text-primary font-bold">{typeof val === "number" ? (val > 1 ? `x${val.toFixed(2)}` : val.toFixed(2)) : val}</span>
                   </div>
                 ))}
@@ -256,32 +264,30 @@ export default function Panel({ dep, onClose }) {
             </div>
           )}
 
-          {/* Fix command */}
           {dep.fix && (
             <div className="panel-item mb-8">
-              <p className="text-sm font-bold uppercase tracking-widest text-[#2dd4bf] mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase text-green-700 mb-3 flex items-center gap-2">
                 <Zap size={14} /> Recommended Fix
               </p>
-              <div className="bg-[#0A0A14] border border-[#2dd4bf]/20 rounded-xl p-4 flex justify-between items-center gap-4 shadow-[0_0_15px_rgba(45,212,191,0.05)]">
-                <code className="text-[#2dd4bf] text-base break-all font-mono">{dep.fix}</code>
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex justify-between items-center gap-4">
+                <code className="text-green-700 text-sm break-all font-mono">{dep.fix}</code>
                 <Copy text={dep.fix} />
               </div>
             </div>
           )}
 
-          {/* Alternatives */}
           {dep.alts?.length > 0 && (
             <div className="panel-item mb-8">
-              <p className="text-sm font-bold uppercase tracking-widest text-ghost/40 mb-3 flex items-center gap-2">
+              <p className="text-sm font-bold uppercase text-ghost/50 mb-3 flex items-center gap-2">
                 <ArrowRight size={14} /> Safe Alternatives
               </p>
               {dep.alts?.map((a, i) => (
-                <div key={i} className="bg-surface/50 border border-white/10 rounded-xl p-4 mb-3">
+                <div key={i} className="bg-white border border-sky-200 rounded-lg p-4 mb-3">
                   <div className="text-ghost/90 text-base font-bold mb-3 flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-ghost/40" /> {a.name}
                   </div>
-                  <div className="bg-[#0A0A14] border border-white/5 rounded-lg px-4 py-3 flex justify-between items-center gap-4">
-                    <code className="text-ghost/60 text-sm break-all font-mono">{a.cmd}</code>
+                  <div className="bg-sky-50 border border-sky-200 rounded-lg px-4 py-3 flex justify-between items-center gap-4">
+                    <code className="text-ghost/70 text-sm break-all font-mono">{a.cmd}</code>
                     <Copy text={a.cmd} />
                   </div>
                 </div>
@@ -289,7 +295,6 @@ export default function Panel({ dep, onClose }) {
             </div>
           )}
 
-          {/* Generate PR */}
           {dep.fix && (
             <div className="panel-item mt-10">
               <button
@@ -297,20 +302,19 @@ export default function Panel({ dep, onClose }) {
                 onClick={() => setPr(v => !v)}
               >
                 {!pr ? (
-                  <>✦ Generate Pull Request</>
+                  <><GitPullRequest size={16} /> Generate Pull Request</>
                 ) : (
-                  <>▲ Hide PR Diff</>
+                  <><ChevronUp size={16} /> Hide PR Diff</>
                 )}
               </button>
 
               {pr && (
-                <div className="mt-4 bg-[#0A0A14] border border-white/10 rounded-2xl overflow-hidden shadow-2xl animate-fade-up">
-                  <div className="px-5 py-3 border-b border-white/10 flex justify-between items-center bg-white/[0.02]">
-                    <span className="text-ghost/40 text-sm font-mono">patch.diff</span>
+                <div className="mt-4 bg-white border border-sky-200 rounded-lg overflow-hidden animate-fade-up">
+                  <div className="px-5 py-3 border-b border-sky-200 flex justify-between items-center bg-sky-50">
+                    <span className="text-ghost/55 text-sm font-mono">patch.diff</span>
                     <Copy text={diff} />
                   </div>
-                  <pre className="p-5 m-0 text-sm text-ghost/70 overflow-x-auto leading-loose whitespace-pre-wrap font-mono relative">
-                    <div className="absolute top-0 left-0 w-1 h-full bg-primary/50 blur-sm" />
+                  <pre className="p-5 m-0 text-sm text-ghost/75 overflow-x-auto leading-loose whitespace-pre-wrap font-mono relative">
                     {diff}
                   </pre>
                 </div>
