@@ -11,3 +11,5 @@ feedparser
 PyJWT>=2.8.0
 cryptography>=42.0.0
 supabase>=2.0.0
+scikit-learn>=1.0.0
+numpy>=1.20.0

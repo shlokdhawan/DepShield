@@ -22,10 +22,12 @@ try:
     from .nvd_client import enrich_vulns_with_nvd
     from .scoring import ScoringInput, compute_risk_score
     from .rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm, generate_ai_analysis
+    from .action_clustering import perform_clustering
 except (ImportError, ValueError):
     from nvd_client import enrich_vulns_with_nvd
     from scoring import ScoringInput, compute_risk_score
     from rag_client import query_similar_cves, upsert_cve, generate_remediation, query_threats, evaluate_threat_with_llm, generate_ai_analysis
+    from action_clustering import perform_clustering
 
 logger = logging.getLogger(__name__)
 
@@ -558,10 +560,25 @@ def _analyze_single(dep_info):
     if sev != "SAFE" and latest_ver != version:
         fix_cmd = f"npm install {name}@{latest_ver}"
 
+    # Action Clustering Features (normalized to [0,1])
+    val_v = min(1.0, max_cvss / 10.0)
+    val_o = min(1.0, versions_behind / 10.0) if versions_behind > 0 else min(1.0, days_since_modified / 730.0)
+    val_u = min(1.0, usage_count / 10.0) if usage_count > 0 else 0.0
+    val_d = min(1.0, (depth - 1) / 5.0) if depth >= 1 else 0.0
+    val_m = min(1.0, score_breakdown.get("health_penalty", 0.0) / 2.0)
+    val_r = min(1.0, score / 10.0)
+
     return {
         "id": 0, # assigned by caller
         "name": name,
         "version": version,
+        "V": val_v,
+        "O": val_o,
+        "U": val_u,
+        "D": val_d,
+        "M": val_m,
+        "R": val_r,
+        "has_critical_cve": (sev == "CRITICAL"),
         "latest": latest_ver,
         "sev": sev,
         "score": score,
@@ -729,9 +746,23 @@ def analyze_manifest(filename, content, usage_map=None):
                 r["alts"] = []
                 r["reco"] = ""
 
-    # Sort: critical first, then by score descending
-    sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "SAFE": 4}
-    results.sort(key=lambda d: (sev_order.get(d["sev"], 5), -d["score"]))
+    # Perform clustering
+    perform_clustering(results)
+
+    # Update colors based on cluster
+    cluster_color_map = {
+        "Fix This Week": "var(--red)",
+        "Replace": "var(--orange)",
+        "Monitor": "var(--yellow)",
+        "Safe": "var(--teal)"
+    }
+    for r in results:
+        label = r.get("cluster_label", "Safe")
+        r["col"] = cluster_color_map.get(label, "var(--teal)")
+
+    # Sort: cluster first, then by R descending
+    cluster_order = {"Fix This Week": 0, "Replace": 1, "Monitor": 2, "Safe": 3}
+    results.sort(key=lambda d: (cluster_order.get(d.get("cluster_label", "Safe"), 4), -d.get("R", 0.0)))
 
     # Assign sequential IDs
     for i, r in enumerate(results):

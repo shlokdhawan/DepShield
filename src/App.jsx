@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Copy, CountUp, GaugeArc, Chip, Bar } from "./components/UI";
 import { SEV } from "./components/Data";
 import Graph from "./components/Graph";
@@ -191,7 +191,15 @@ export default function App() {
     .sort((a, b) => { let av = a[sCol], bv = b[sCol]; if (typeof av === "string") { av = av.toLowerCase(); bv = bv.toLowerCase(); } return sDir === "asc" ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1); });
 
   const doSort = c => { if (sCol === c) setSDir(d => d === "asc" ? "desc" : "asc"); else { setSCol(c); setSDir("desc"); } };
-  const fixes = activeDeps.filter(d => d.sev !== "SAFE" && d.fix).sort((a, b) => b.score - a.score);
+  
+  const clusterGroups = ["Fix This Week", "Replace", "Monitor", "Safe"];
+  const fixesGrouped = clusterGroups.map(label => {
+    return {
+      label,
+      items: activeDeps.filter(d => (d.cluster_label || "Safe") === label && d.fix).sort((a, b) => (b.R || 0) - (a.R || 0))
+    };
+  }).filter(g => g.items.length > 0);
+  const totalFixes = fixesGrouped.reduce((acc, g) => acc + g.items.length, 0);
 
   const Stat = ({ label, val, color, sub }) => (
     <div className="glass-panel rounded-2xl p-6 relative flex flex-col justify-between min-h-[140px] transform transition-transform hover:-translate-y-1">
@@ -563,34 +571,51 @@ export default function App() {
                   <p className="text-sm text-ghost/60">Ranked actionable fixes targeting the highest CVSS impact vectors.</p>
                 </div>
 
-                <div className="space-y-4">
-                  {fixes.map((d, i) => (
-                    <div key={d.id} className="glass-panel rounded-xl overflow-hidden shadow-sm relative">
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-surface" style={{ backgroundColor: SEV[d.sev]?.hex }} />
-                      <div className="p-6 pl-8">
-                        <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-4">
-                          <div>
-                            <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
-                              {d.name}
-                              <span className="bg-background px-2 py-0.5 rounded text-sm font-mono font-normal border border-white/5 text-ghost/50 tracking-normal">v{d.version} &rarr; <span className="text-emerald-400">v{d.fixv}</span></span>
-                            </h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Chip sev={d.sev} />
-                            <span className="px-2 py-1 bg-background border border-white/5 text-ghost/60 rounded text-sm uppercase font-bold tracking-normal">{d.effort} Fix</span>
-                          </div>
+                <div className="space-y-8">
+                  {fixesGrouped.map(group => (
+                    <details key={group.label} open className="group">
+                      <summary className="flex items-center gap-3 cursor-pointer list-none mb-4 outline-none">
+                        <div className="w-5 h-5 rounded flex items-center justify-center bg-white/5 border border-white/10 text-ghost/50 group-open:rotate-90 transition-transform">
+                          <ArrowRight size={12} />
                         </div>
+                        <h3 className="text-xl font-bold">{group.label} <span className="ml-2 text-sm font-normal text-ghost/40 bg-white/5 px-2 py-0.5 rounded-full">{group.items.length}</span></h3>
+                      </summary>
+                      <div className="space-y-4 pl-8 border-l border-white/5 ml-2.5">
+                        {group.items.map((d, i) => (
+                          <div key={d.id} className="glass-panel rounded-xl overflow-hidden shadow-sm relative">
+                            <div className="absolute left-0 top-0 bottom-0 w-1 bg-surface" style={{ backgroundColor: d.col || SEV[d.sev]?.hex }} />
+                            <div className="p-6 pl-8">
+                              <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-4">
+                                <div>
+                                  <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
+                                    {d.name}
+                                    <span className="bg-background px-2 py-0.5 rounded text-sm font-mono font-normal border border-white/5 text-ghost/50 tracking-normal">v{d.version} &rarr; <span className="text-emerald-400">v{d.fixv}</span></span>
+                                  </h3>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {d.override_applied && (
+                                    <span className="px-2 py-1 bg-red-500/10 border border-red-500/30 text-red-400 rounded text-xs uppercase font-bold tracking-normal flex items-center gap-1">
+                                      <AlertTriangle size={12} /> Escalated: active critical CVE
+                                    </span>
+                                  )}
+                                  <Chip sev={d.sev} />
+                                  <span className="px-2 py-1 bg-background border border-white/5 text-ghost/60 rounded text-sm uppercase font-bold tracking-normal">{d.effort} Fix</span>
+                                </div>
+                              </div>
 
-                        <p className="text-sm text-ghost/70 leading-relaxed mb-4 border-l-2 border-white/10 pl-3">{d.desc}</p>
+                              <p className="text-sm text-ghost/70 leading-relaxed mb-4 border-l-2 border-white/10 pl-3">{d.desc}</p>
 
-                        <div className="bg-background border border-white/5 rounded-lg p-3 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
-                          <code className="text-primary font-mono text-sm break-all tracking-normal">{d.fix}</code>
-                          <Copy text={d.fix} />
-                        </div>
+                              <div className="bg-background border border-white/5 rounded-lg p-3 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                                <code className="text-primary font-mono text-sm break-all tracking-normal">{d.fix}</code>
+                                <Copy text={d.fix} />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
+                    </details>
                   ))}
-                  {fixes.length === 0 && (
+                  {totalFixes === 0 && (
                     <div className="text-center p-12 glass-panel rounded-2xl text-ghost/50 border-dashed">
                       <CheckCircle2 size={32} className="mx-auto mb-3 text-emerald-500 opacity-60" />
                       <p className="text-sm font-semibold">No actionable patches found.</p>

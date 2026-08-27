@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ZoomIn, ZoomOut, RotateCcw, Search, X } from "lucide-react";
 import { SEV } from "./Data";
 
@@ -249,7 +249,7 @@ export default function Graph({ deps, onPick }) {
                   <rect x={tx + 1.5} y={ty + 1.5} width={tw - 3} height={th - 3} rx={6.5} fill={`${col}08`} />
                   <text x={tx + 16} y={ty + 26} fill={col} fontSize={14} fontFamily="Fira Code" fontWeight="700">{displayName}</text>
                   <text x={tx + 16} y={ty + 48} fill="#0C4A6E" fontSize={12} fontFamily="Fira Code" opacity={0.65}>v{dep.version}</text>
-                  <text x={tx + 16} y={ty + 68} fill="#0C4A6E" fontSize={12} fontFamily="Fira Code" opacity={0.8}>Score: {dep.score.toFixed(1)} - {dep.sev}</text>
+                  <text x={tx + 16} y={ty + 68} fill="#0C4A6E" fontSize={12} fontFamily="Fira Code" opacity={0.8}>Score: {dep.score.toFixed(1)} &middot; {dep.cluster_label || dep.sev}{dep.override_applied ? " (override)" : ""}</text>
                   <circle cx={tx + tw - 24} cy={ty + 23} r={4} fill={col} />
                 </g>
               );
