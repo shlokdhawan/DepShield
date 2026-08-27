@@ -17,19 +17,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run DepShield scan
-        id: scan
+      - name: Install Python Dependencies
         run: |
-          # Use package-lock.json if it exists, otherwise package.json
-          MANIFEST="package.json"
-          if [ -f "package-lock.json" ]; then
-            MANIFEST="package-lock.json"
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run DepShield scan locally
+        id: scan
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+        run: |
+          python3 - <<'EOF'
+          import os, json, sys
+          sys.path.insert(0, os.path.abspath('backend'))
+          from analyzer import analyze_manifest
           
-          # Replace with your actual hosted instance URL
-          curl -s -X POST https://your-depshield.onrender.com/api/scan-file \
-            -F "file=@$MANIFEST" \
-            -o scan_result.json
+          manifest = "package.json"
+          if os.path.exists("package-lock.json"):
+              manifest = "package-lock.json"
+              
+          with open(manifest, "r", encoding="utf-8") as f:
+              content = f.read()
+              
+          results = analyze_manifest(manifest, content)
+          
+          with open("scan_result.json", "w", encoding="utf-8") as f:
+              json.dump(results, f)
+          EOF
 
       - name: Convert to SARIF
         run: |
@@ -41,7 +57,7 @@ jobs:
                   deps = json.load(f)
           except Exception:
               print("No scan result found or invalid JSON")
-              sys.exit(0)
+              sys.exit(1)
 
           sarif = {
             "version": "2.1.0",
