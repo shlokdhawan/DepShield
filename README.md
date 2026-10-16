@@ -8,6 +8,14 @@ DepShield is a personal AI-powered tool designed to analyze project dependencies
 - **Dependency Visualization**: See exactly what's in your project at a glance.
 - **Fast and Lightweight**: Built with React and Vite for a seamless developer experience.
 
+## Research evaluation
+
+See [EVALUATION.md](EVALUATION.md) for reproducible k=3/k=4 comparisons, pinned
+repository scans, npm audit/Snyk agreement reports, and the limitations identified
+in the submitted research paper. Four action groups are an operational choice;
+the current code does not establish k=4 as statistically optimal. Missing research
+data is rejected, never replaced with random data or zero-valued features.
+
 ## Getting Started
 
 Follow these steps to set up and run DepShield on your local machine.
@@ -37,6 +45,11 @@ Follow these steps to set up and run DepShield on your local machine.
    ```
 
 ### Running the Application
+
+For local scanning without Supabase or GitHub credentials, set
+`DEPSHIELD_SCAN_ONLY=1` before starting the backend. Repository/file scans remain
+available; login and monitoring return a clear unavailable response. This mode
+does not configure AI API keys. Leave it unset for the full configured app.
 
 DepShield requires both the React frontend and the Flask backend to be running.
 

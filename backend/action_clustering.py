@@ -1,5 +1,8 @@
-"""
-K-Means Action Clustering for DepShield.
+"""Four operational action groups, not a statistically validated optimal k.
+
+Compare k=3/k=4 on preserved features with scripts/evaluate_clustering.py
+before changing this application policy. Research metrics must use raw
+cluster_id assignments, before the critical-risk action override.
 """
 import numpy as np
 from sklearn.cluster import KMeans

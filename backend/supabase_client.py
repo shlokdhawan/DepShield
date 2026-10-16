@@ -12,8 +12,9 @@ load_dotenv(dotenv_path)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+SCAN_ONLY = os.environ.get("DEPSHIELD_SCAN_ONLY", "").lower() in ("1", "true")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+if not SCAN_ONLY and (not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY):
     logger.error("[supabase_client] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env")
     raise ValueError("Missing Supabase credentials in .env file. Please add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
 
@@ -21,7 +22,7 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
 # Security Note: This uses the service role key and bypasses Row Level Security.
 # It should ONLY be used in the secure backend context. Never expose this key to the frontend.
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    supabase: Client | None = None if SCAN_ONLY else create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 except Exception as e:
     logger.error(f"[supabase_client] Failed to initialize Supabase client: {str(e)}")
     raise

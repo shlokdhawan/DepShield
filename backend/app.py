@@ -66,6 +66,13 @@ except (ImportError, ValueError):
 
 app = Flask(__name__, static_folder="../dist", static_url_path="/")
 CORS(app)
+SCAN_ONLY = os.environ.get("DEPSHIELD_SCAN_ONLY", "").lower() in ("1", "true")
+
+
+@app.before_request
+def check_local_mode():
+    if SCAN_ONLY and request.path.startswith(("/api/auth/", "/api/dashboard/", "/api/github/")):
+        return jsonify({"error": "GitHub login and monitoring are unavailable in local scan-only mode. Configure the project .env to enable them."}), 503
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
@@ -88,7 +95,7 @@ except Exception:
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "git": GIT_AVAILABLE})
+    return jsonify({"status": "ok", "git": GIT_AVAILABLE, "scan_only": SCAN_ONLY})
 
 
 def fetch_github_api(repo_url):

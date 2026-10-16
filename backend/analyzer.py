@@ -191,7 +191,7 @@ def _effort(score, depth):
 
 # ─── API QUERIES ───────────────────────────────────────────────────────────────
 
-def query_osv(name, version):
+def query_osv(name, version, strict_errors=False):
     """Query the OSV vulnerability database for a specific package@version."""
     try:
         r = requests.post(
@@ -204,6 +204,7 @@ def query_osv(name, version):
         results = []
         for v in vulns:
             vid = v.get("id", "")
+            cvss = 0.0
             cvss_vector = ""
             for sev_entry in v.get("severity", []):
                 if sev_entry.get("type") == "CVSS_V3":
@@ -241,10 +242,12 @@ def query_osv(name, version):
                 "url": f"https://osv.dev/vulnerability/{vid}",
             })
         return results
-    except Exception:
+    except Exception as exc:
+        if strict_errors:
+            raise RuntimeError(f"OSV lookup failed for {name}@{version}") from exc
         return []
 
-def fetch_osv_batch(deps_list):
+def fetch_osv_batch(deps_list, strict_errors=False):
     """Fetch OSV data for a list of packages in parallel and store in OSV_CACHE."""
     unique_queries = []
     for d in deps_list:
@@ -259,7 +262,7 @@ def fetch_osv_batch(deps_list):
     # OSV individual queries return full metadata; querybatch does not.
     with ThreadPoolExecutor(max_workers=40) as executor:
         future_to_key = {
-            executor.submit(query_osv, name, ver): f"{name}@{ver}"
+            executor.submit(query_osv, name, ver, strict_errors): f"{name}@{ver}"
             for name, ver in unique_queries
         }
         for future in as_completed(future_to_key):
@@ -267,6 +270,8 @@ def fetch_osv_batch(deps_list):
             try:
                 OSV_CACHE[key] = future.result()
             except Exception as e:
+                if strict_errors:
+                    raise RuntimeError(f"Incomplete OSV scan: {key}") from e
                 logger.error(f"Failed to fetch OSV for {key}: {e}")
                 OSV_CACHE[key] = []
 
@@ -297,7 +302,7 @@ def _extract_license(data):
     return "Unknown"
 
 
-def query_npm_meta(name):
+def query_npm_meta(name, strict_errors=False):
     """Fetch latest version, dates, license, maintainer info from npm registry."""
     if name in NPM_CACHE:
         return NPM_CACHE[name]
@@ -331,13 +336,19 @@ def query_npm_meta(name):
             if dr.status_code == 200:
                 res["weekly_downloads"] = dr.json().get("downloads", 0)
             else:
+                if strict_errors:
+                    raise RuntimeError(f"Download metadata returned HTTP {dr.status_code}")
                 res["weekly_downloads"] = 0
         except Exception:
+            if strict_errors:
+                raise
             res["weekly_downloads"] = 0
 
         NPM_CACHE[name] = res
         return res
-    except Exception:
+    except Exception as exc:
+        if strict_errors:
+            raise RuntimeError(f"npm metadata lookup failed for {name}") from exc
         return None
 
 
@@ -357,7 +368,7 @@ def _analyze_single(dep_info):
     meta = None
     # Smart NPM Registry Bypass: Only fetch metadata if it's a direct dependency or has vulnerabilities
     if depth == 1 or len(vulns) > 0:
-        meta = query_npm_meta(name)
+        meta = query_npm_meta(name, strict_errors=dep_info.get("strict_errors", False))
 
     # ── Compute CVSS-like score (max of individual CVEs) ──
     max_cvss = 0.0
@@ -608,10 +619,11 @@ def _analyze_single(dep_info):
     }
 
 
-def analyze_manifest(filename, content, usage_map=None):
+def analyze_manifest(filename, content, usage_map=None, strict_errors=False):
     """
     Analyze a parsed package.json or package-lock.json.
     Returns list of dep objects in the exact DEPS format the frontend expects.
+    Research captures set strict_errors to reject failed core data lookups.
     """
     deps_to_scan = []
 
@@ -682,6 +694,7 @@ def analyze_manifest(filename, content, usage_map=None):
             project_type = "Backend (Express/Node)"
 
     for d in deps_to_scan:
+        d["strict_errors"] = strict_errors
         d["project_type"] = project_type
         if usage_map is not None:
             d["usage_count"] = usage_map.get(d["name"], 0)
@@ -690,7 +703,7 @@ def analyze_manifest(filename, content, usage_map=None):
 
     t1 = time.time()
     # Pre-fetch OSV vulnerabilities in batches
-    fetch_osv_batch(deps_to_scan)
+    fetch_osv_batch(deps_to_scan, strict_errors=strict_errors)
     
     # ── BATCH ENRICHMENT (CVE/GHSA) ──
     # Instead of enriching each dependency individually (which creates nested thread pools),
@@ -713,6 +726,8 @@ def analyze_manifest(filename, content, usage_map=None):
                 result = future.result()
                 results.append(result)
             except Exception as e:
+                if strict_errors:
+                    raise RuntimeError(f"Incomplete package analysis: {futures[future]['name']}") from e
                 dep = futures[future]
                 results.append({
                     "name": dep["name"],

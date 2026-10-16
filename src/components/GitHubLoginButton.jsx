@@ -4,18 +4,22 @@ import { API_BASE } from '../config/api';
 
 export default function GitHubLoginButton() {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleLogin = async () => {
     setLoading(true);
+    setError('');
     try {
       const res = await fetch(`${API_BASE}/api/auth/github`);
       const data = await res.json();
+      if (!res.ok || !data.url) throw new Error(data.error || 'Could not connect to GitHub.');
 
       if (data.url) {
         window.location.href = data.url;
       }
     } catch (err) {
       console.error('Failed to initiate GitHub login:', err);
+      setError(err.message);
       setLoading(false);
     }
   };
@@ -51,6 +55,7 @@ export default function GitHubLoginButton() {
       <p className="mt-3 text-ghost/50 text-xs font-mono">
         Connect repos for automatic dependency monitoring
       </p>
+      {error && <p role="alert" className="mt-3 text-red-700 text-sm">{error}</p>}
     </div>
   );
 }
